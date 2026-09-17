@@ -56,6 +56,130 @@
         }
       }, 20000);
     })();
+
+    /*
+     * Sonda de red, en JavaScript puro y **antes** de Angular.
+     *
+     * Existe porque el sintoma (todo en "loading", sockets en "connecting") se puede deber a dos
+     * cosas muy distintas: que la app no funcione, o que el navegador no consiga hablar con el
+     * gateway. Esto mide lo segundo sin depender de Angular, ni de signals, ni del render: una
+     * peticion cruda del navegador al propio origen y al gateway.
+     *
+     * El resultado se ve en la pantalla con `?diag=1`, en el bloque de diagnostico.
+     */
+    window.__aggoraProbe = { lines: [], listo: false };
+    (function () {
+      var registro = window.__aggoraProbe;
+      /*
+       * La sonda pinta su propio bloque en el DOM. No espera a Angular a proposito: si la pagina se
+       * queda colgada, el bloque de diagnostico de la app puede no llegar a existir nunca, y entonces
+       * no habria forma de saber que esta pasando sin abrir la consola.
+       */
+      function pintar() {
+        try {
+          var pre = document.getElementById('net-probe');
+          if (!pre) {
+            pre = document.createElement('pre');
+            pre.id = 'net-probe';
+            pre.style.cssText =
+              'margin:16px;padding:12px;border:1px solid #7c5cff;border-radius:8px;' +
+              'background:#120d1c;color:#e6ddff;font:12px/1.6 monospace;white-space:pre-wrap;';
+            document.body.appendChild(pre);
+          }
+          pre.textContent =
+            'Network probe (raw browser, before Angular)' +
+            (registro.listo ? '' : '  [running...]') +
+            '\n' +
+            registro.lines.join('\n');
+        } catch (e) {
+          /* Si esto falla, no hay nada mas que hacer. */
+        }
+      }
+      function anotar(linea) {
+        registro.lines.push(linea);
+        pintar();
+      }
+      function probar(etiqueta, url, limiteMs) {
+        var inicio = Date.now();
+        return new Promise(function (resolve) {
+          var control = new AbortController();
+          var corte = setTimeout(function () {
+            control.abort();
+            anotar(etiqueta + ': TIMEOUT a los ' + (Date.now() - inicio) + ' ms');
+            resolve();
+          }, limiteMs);
+          fetch(url, { signal: control.signal, cache: 'no-store' })
+            .then(function (r) {
+              return r.text().then(function (texto) {
+                clearTimeout(corte);
+                anotar(
+                  etiqueta +
+                    ': HTTP ' +
+                    r.status +
+                    ', ' +
+                    texto.length +
+                    ' B en ' +
+                    (Date.now() - inicio) +
+                    ' ms',
+                );
+                resolve();
+              });
+            })
+            .catch(function (e) {
+              clearTimeout(corte);
+              anotar(etiqueta + ': FALLO en ' + (Date.now() - inicio) + ' ms (' + e.name + ': ' + e.message + ')');
+              resolve();
+            });
+        });
+      }
+      (async function () {
+        anotar('origin: ' + location.origin + ' | href: ' + location.href);
+        anotar('tiempo de carga de la pagina: ' + Math.round(performance.now()) + ' ms');
+        await probar('mismo origen (favicon)', '/favicon.ico', 5000);
+        await probar('gateway /api', '/api/metrics?panel=pulso', 6000);
+        await probar('gateway /q/api', '/q/api/metrics?panel=pulso', 6000);
+        await probar('analytics /analytics', '/analytics?symbol=EUR%2FUSD&minutes=3', 6000);
+        // El WebSocket se mide aparte: no es fetch y falla de otra manera.
+        try {
+          var inicioWs = Date.now();
+          var ws = new WebSocket('ws://' + location.host + '/ws');
+          var cerrado = false;
+          ws.onopen = function () {
+            cerrado = true;
+            anotar('websocket /ws: ABIERTO en ' + (Date.now() - inicioWs) + ' ms');
+            ws.close();
+          };
+          ws.onerror = function () {
+            if (!cerrado) {
+              cerrado = true;
+              anotar('websocket /ws: ERROR a los ' + (Date.now() - inicioWs) + ' ms');
+            }
+          };
+          ws.onclose = function (e) {
+            if (!cerrado) {
+              cerrado = true;
+              anotar('websocket /ws: CERRADO code=' + e.code + ' sin abrir');
+            }
+          };
+          setTimeout(function () {
+            if (!cerrado) {
+              cerrado = true;
+              anotar('websocket /ws: sigue en CONNECTING a los 6000 ms');
+            }
+          }, 6000);
+        } catch (e) {
+          anotar('websocket /ws: el constructor lanzo ' + e.message);
+        }
+        // Margen para que el WebSocket cuente su final.
+        await new Promise(function (r) {
+          setTimeout(r, 6500);
+        });
+        registro.listo = true;
+        pintar();
+      })();
+      // Aunque el script se quede a medias, se pinta lo que haya a los 3 s.
+      setTimeout(pintar, 3000);
+    })();
   </script>
 </head>
 <body>

@@ -182,6 +182,8 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
       `socket spring: ${this.live.live().spring.state} | quarkus: ${this.live.live().quarkus.state}`,
       `messages parsed: ${this.live.messageCount()}`,
       `backend from the browser: ${this.backendReachable()}`,
+      '--- sonda cruda (antes de Angular) ---',
+      ...this.lineasSonda(),
       ...this.lineasDiag(),
     ];
     pre.textContent = lineas.join('\n');
@@ -216,6 +218,15 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
         this.backendReachable.set(`${url} -> FALLO en ${Date.now() - inicio} ms: ${String(error)}`);
       }
     }
+  }
+
+  /** Lineas que midio la sonda cruda de `index.html`, si ya termino. */
+  private lineasSonda(): readonly string[] {
+    const sonda = (globalThis as { __aggoraProbe?: { lines: string[]; listo: boolean } }).__aggoraProbe;
+    if (!sonda) {
+      return ['(la sonda no existe: index.html no la ejecuto)'];
+    }
+    return [...sonda.lines, sonda.listo ? '(sonda terminada)' : '(sonda en curso)'];
   }
 
   /** Permite anotar lineas en el informe de diagnostico desde los servicios. */
