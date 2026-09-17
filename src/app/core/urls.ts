@@ -80,14 +80,21 @@ export function wsUrl(endpoints: StackEndpoints, page: PageContext = pageContext
   return `${wsBase('', page)}${endpoints.wsPath}`;
 }
 
-/** URL de la consulta interactiva del state store. */
+/**
+ * URL de la consulta interactiva del state store.
+ *
+ * Ojo: si la base ya acaba en `/analytics` (es el caso de la ruta del proxy), no se le anade otra vez.
+ * El bug era justo ese: salia `/analytics/analytics` y el backend contestaba 404.
+ */
 export function analyticsUrl(
   endpoints: StackEndpoints,
   symbol: string,
   minutes: number,
 ): string {
   const params = new URLSearchParams({ symbol, minutes: String(minutes) });
-  return `${httpBase(endpoints.analytics)}/analytics?${params.toString()}`;
+  const base = httpBase(endpoints.analytics);
+  const ruta = base.endsWith('/analytics') ? base : `${base}/analytics`;
+  return `${ruta}?${params.toString()}`;
 }
 
 /** URL de la sonda de salud del stack. */

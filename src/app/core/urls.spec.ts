@@ -109,6 +109,13 @@ describe('urls', () => {
     expect(metricsUrl(ENDPOINTS_MISMO_ORIGEN, 'comparativa', 'lag')).toContain('de=lag');
   });
 
+  it('analyticsUrl no duplica la ruta cuando la base ya es /analytics', () => {
+    // La ruta del proxy es /analytics: antes salia /analytics/analytics y el backend daba 404.
+    const url = analyticsUrl(ENDPOINTS_MISMO_ORIGEN, 'EUR/USD', 3);
+    expect(url).not.toContain('/analytics/analytics');
+    expect(url).toBe(`${location.origin}/analytics?symbol=EUR%2FUSD&minutes=3`);
+  });
+
   it('analyticsUrl codifica el simbolo: EUR/USD lleva barra', () => {
     const url = analyticsUrl(ENDPOINTS, 'EUR/USD', 3);
     expect(url).toBe('http://localhost:8085/analytics?symbol=EUR%2FUSD&minutes=3');
