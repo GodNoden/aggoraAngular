@@ -20,13 +20,17 @@ const NATIVOS = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].filter(Boolean);
 
-// Chrome de Windows visto desde WSL: hay que pasarlo por tools/chrome-wsl.sh, que traduce las
-// rutas de Linux (--user-data-dir=/tmp/...) a rutas de Windows. Sin eso Chrome arranca y muere
-// con codigo 21 y Karma solo dice "Cannot start ChromeHeadless".
+// Navegador de Windows visto desde WSL: hay que pasarlo por tools/chrome-wsl.sh, que traduce las
+// rutas de Linux (--user-data-dir=/tmp/...) a rutas de Windows. Sin eso arranca y muere con codigo
+// 21, y Karma solo dice "Cannot start ChromeHeadless".
+//
+// Edge esta en la lista porque es Chromium y sirve igual: en este equipo Chrome desaparecio y los
+// tests tienen que seguir corriendo con lo que haya.
 const WRAPPERS_WSL = [
   '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe',
   '/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   '/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  '/mnt/c/Program Files/Microsoft/Edge/Application/msedge.exe',
 ];
 
 const existe = (ruta) => {
@@ -45,7 +49,7 @@ const encontrado = nativo || (deWindows ? wrapper : undefined);
 
 if (encontrado === wrapper) {
   process.env.CHROME_WSL_BIN = deWindows;
-  console.log(`[karma] Chrome de Windows via tools/chrome-wsl.sh -> ${path.normalize(deWindows)}`);
+  console.log(`[karma] navegador de Windows via tools/chrome-wsl.sh -> ${path.normalize(deWindows)}`);
 } else if (encontrado) {
   console.log(`[karma] CHROME_BIN = ${path.normalize(encontrado)}`);
 } else {
