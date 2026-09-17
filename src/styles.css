@@ -452,6 +452,25 @@ code {
   font-size: 10.5px;
 }
 
+/* ------------------------------------------------------------------ diagnostico (?diag=1) */
+
+/*
+ * El informe se pinta con una interpolacion de la plantilla, no escribiendo el DOM a mano: asi se
+ * actualiza cuando la vista se refresca y no depende de que un hook se ejecute.
+ */
+.diag-report {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  background: #120d14;
+  color: #ffd9a0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 /* ------------------------------------------------------------------ responsive */
 
 @media (max-width: 1080px) {

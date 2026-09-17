@@ -273,11 +273,12 @@
     <header class="section-head">
       <h2>Diagnostics (?diag=1)</h2>
       <p>
-        Change detection cycles, panel states and socket states, readable without the browser
-        console. If the cycle count climbs into the thousands per second, the main thread is in a
-        loop and that is why nothing else runs.
+        Panel states, socket states and the raw network probe, readable without opening the browser
+        console. The clock of the page ticks once per second; if that count climbs, the main thread
+        is in a loop and that is why nothing else runs.
       </p>
     </header>
+    <pre id="diag-report" class="diag-report">{{ informeDiag() || 'taking the first measurement...' }}</pre>
   </section>
 }
 

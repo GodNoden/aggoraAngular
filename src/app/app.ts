@@ -1,8 +1,6 @@
 import {
-  AfterViewChecked,
   ChangeDetectionStrategy,
   Component,
-  DoCheck,
   OnDestroy,
   computed,
   inject,
@@ -93,7 +91,7 @@ const SLOTS: readonly PanelSlot[] = [
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
-export class App implements OnDestroy, DoCheck, AfterViewChecked {
+export class App implements OnDestroy {
   protected readonly live = inject(LiveService);
   protected readonly metrics = inject(MetricsService);
   protected readonly analytics = inject(AnalyticsService);
@@ -117,67 +115,63 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
   private readonly reloj = signal(Date.now());
   readonly now = this.reloj.asReadonly();
 
-  private readonly latido = setInterval(() => this.reloj.set(Date.now()), 1000);
+  /**
+   * El informe de diagnostico, ya compuesto como texto.
+   *
+   * **Se calcula desde el reloj y se pinta con una interpolacion de la plantilla, no escribiendo el
+   * DOM a mano.** Ese cambio es el arreglo de un fallo real de esta pagina: antes el informe se
+   * reescribia dentro de `ngAfterViewChecked`, y en esta version de Angular ese hook puede no
+   * ejecutarse aunque la vista se siga refrescando (medido: el reloj de la pantalla avanzaba y el
+   * contador de `ngDoCheck` se quedaba en 2). Resultado: con `?diag=1` el informe se quedaba
+   * congelado en el estado del arranque y parecia que la app no volvia a pedir nada.
+   */
+  protected readonly informeDiag = signal('');
 
   /**
-   * Cuantas veces se ha ejecutado la deteccion de cambios.
-   *
-   * Existe para diagnosticar un sintoma concreto: si la pagina se queda colgada y los datos no
-   * llegan, la causa mas probable es un bucle de deteccion de cambios que satura el hilo principal y
-   * deja sin turno a las respuestas HTTP. Se puede leer desde fuera en `<pre id="diag-report">` y con
-   * `?diag=1`. No se usa para nada mas.
+   * Cuantas veces por segundo late el reloj: si esto se dispara, la deteccion de cambios esta en
+   * bucle y el hilo principal no tiene turno para nada mas.
    */
-  private readonly ciclos = signal(0);
-  private readonly lineasDiag = signal<readonly string[]>([]);
+  protected readonly latidosPorSegundo = signal(0);
+
+  private readonly latido = setInterval(() => {
+    const ahora = Date.now();
+    this.reloj.set(ahora);
+    this.contarLatido(ahora);
+    if (this.modoDiag && !this.sinDiag) {
+      this.informeDiag.set(this.componerInforme());
+    }
+  }, 1000);
+
+  /** Ventana del latido: sirve para detectar un bucle de deteccion. */
   private inicioVentana = Date.now();
-  private ciclosEnVentana = 0;
+  private latidosEnVentana = 0;
   /** Bucle de deteccion de cambios detectado: solo puede ser un bug de la app. */
   readonly bucleDetectado = signal(false);
 
-  ngDoCheck(): void {
-    this.ciclosEnVentana += 1;
-    const ahora = Date.now();
-    if (ahora - this.inicioVentana > 1000) {
-      const porSegundo = this.ciclosEnVentana;
-      this.inicioVentana = ahora;
-      this.ciclosEnVentana = 0;
-      this.ciclos.update((valor) => valor + porSegundo);
-      if (porSegundo > 200 && !this.bucleDetectado()) {
+  private contarLatido(ahora: number): void {
+    this.latidosEnVentana += 1;
+    if (ahora - this.inicioVentana >= 1000) {
+      this.latidosPorSegundo.set(this.latidosEnVentana);
+      if (this.latidosEnVentana > 200 && !this.bucleDetectado()) {
         this.bucleDetectado.set(true);
       }
-      this.actualizarDiag(porSegundo);
+      this.latidosEnVentana = 0;
+      this.inicioVentana = ahora;
     }
   }
 
-  ngAfterViewChecked(): void {
-    this.actualizarDiag(null);
-  }
-
-  /** Informe de diagnostico en el DOM, legible sin abrir la consola. */
-  private actualizarDiag(ciclosPorSegundo: number | null): void {
-    if (typeof document === 'undefined') {
-      return;
-    }
-    let pre = document.getElementById('diag-report');
-    if (!pre && !this.modoDiag) {
-      return;
-    }
-    if (!pre) {
-      pre = document.createElement('pre');
-      pre.id = 'diag-report';
-      pre.style.cssText =
-        'margin:12px;padding:10px;border:1px solid #7f1d1d;border-radius:8px;background:#120d14;' +
-        'color:#ffd9a0;font:11px/1.5 monospace;white-space:pre-wrap;';
-      document.body.appendChild(pre);
-    }
+  /**
+   * Compone el informe: estados de los paneles, sockets, sonda cruda de red y las metricas del
+   * navegador. Todo lo que hace falta para saber si la pagina esta viva sin abrir la consola.
+   */
+  private componerInforme(): string {
     const paneles = Object.values(this.metrics.panels());
     const porEstado: Record<string, number> = {};
     for (const panel of paneles) {
       porEstado[panel.status] = (porEstado[panel.status] ?? 0) + 1;
     }
-    const lineas = [
-      `change detection: total=${this.ciclos()}${ciclosPorSegundo !== null ? ` (last second: ${ciclosPorSegundo})` : ''}`,
-      `loop detected: ${this.bucleDetectado()}`,
+    return [
+      `latidos del reloj: ${this.latidosPorSegundo()} por segundo${this.bucleDetectado() ? '  *** BUCLE DE DETECCION ***' : ''}`,
       `panels: ${JSON.stringify(porEstado)}`,
       `ciclos de paneles descartados por colgarse: ${this.metrics.descartados}`,
       `socket spring: ${this.live.live().spring.state} | quarkus: ${this.live.live().quarkus.state}`,
@@ -185,9 +179,8 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
       `backend from the browser: ${this.backendReachable()}`,
       '--- sonda cruda (antes de Angular) ---',
       ...this.lineasSonda(),
-      ...this.lineasDiag(),
-    ];
-    pre.textContent = lineas.join('\n');
+      ...this.notasDiag,
+    ].join('\n');
   }
 
   /** Si el navegador puede hablar con el gateway, medido desde el propio navegador. */
@@ -230,24 +223,61 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
     return [...sonda.lines, sonda.listo ? '(sonda terminada)' : '(sonda en curso)'];
   }
 
+  /** Lineas que los servicios quieren anadir al informe de diagnostico. */
+  private readonly notasDiag: string[] = [];
+
   /** Permite anotar lineas en el informe de diagnostico desde los servicios. */
   anotarDiag(linea: string): void {
-    this.lineasDiag.update((actuales) => [...actuales, linea]);
+    this.notasDiag.push(linea);
   }
 
   constructor() {
     traza('App: constructor inicio');
+    /*
+     * Interruptores de diagnostico, los dos que de verdad sirven para aislar un fallo sin recom
+     * pilar:
+     *
+     *   `?solo=live|metrics|analytics`  arranca un unico servicio (los otros no se tocan).
+     *   `?nodiag=1`                     apaga el repintado del informe de diagnostico.
+     *
+     * Nacieron del fallo de este repositorio: la pagina se quedaba en `loading` con el renderer
+     * bloqueado, y con la app entera no habia forma de saber que pieza lo colgaba.
+     */
+    const solo = new URLSearchParams(location.search).get('solo');
+    const sinDiag = new URLSearchParams(location.search).has('nodiag');
+    const arranca = (nombre: 'live' | 'metrics' | 'analytics'): boolean => !solo || solo === nombre;
+    this.solo = solo;
+    this.sinDiag = sinDiag;
+    traza(`App: interruptores solo=${solo ?? '(ninguno)'} nodiag=${sinDiag}`);
     void this.medirBackend();
     traza('App: medirBackend lanzado');
-    this.live.start();
-    traza('App: live.start hecho');
-    this.metrics.start();
-    traza('App: metrics.start hecho');
-    void this.analytics.query(
-      environment.defaultAnalyticsSymbol,
-      environment.defaultAnalyticsMinutes,
-    );
+    if (arranca('live')) {
+      this.live.start();
+      traza('App: live.start hecho');
+    } else {
+      traza('App: live.start OMITIDO por ?solo=');
+    }
+    if (arranca('metrics')) {
+      this.metrics.start();
+      traza('App: metrics.start hecho');
+    } else {
+      traza('App: metrics.start OMITIDO por ?solo=');
+    }
+    if (arranca('analytics')) {
+      void this.analytics.query(
+        environment.defaultAnalyticsSymbol,
+        environment.defaultAnalyticsMinutes,
+      );
+      traza('App: analytics.query lanzado');
+    } else {
+      traza('App: analytics.query OMITIDO por ?solo=');
+    }
   }
+
+  /** Diagnostico: que servicio se esta ejecutando (`?solo=<nombre>`), si se pidio. */
+  private solo: string | null = null;
+  /** Diagnostico: apaga el repintado del informe en cada ciclo de deteccion. */
+  private sinDiag = false;
 
   ngOnDestroy(): void {
     // El root no se destruye en produccion, pero en los tests si: sin esto, el intervalo se queda

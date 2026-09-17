@@ -10,7 +10,8 @@
     "test": "node tools/run-tests.mjs",
     "test:watch": "ng test",
     "verify:live": "node tools/live-check.mjs",
-    "serve:built": "node tools/serve-verify.mjs"
+    "serve:built": "node tools/serve-verify.mjs",
+    "diag:browser": "node tools/browser-diag.mjs"
   },
   "prettier": {
     "printWidth": 100,

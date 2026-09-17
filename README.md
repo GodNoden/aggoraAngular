@@ -104,6 +104,8 @@ src/app/
   live/                      one component per panel
   ui/                        panel card, metric list, event feed, lesson panel, analytics panel
   verify.ts                  optional in-page verification (?verify=1)
+tools/                       serve-verify.mjs (one-origin bridge), browser-diag.mjs + cdp.mjs +
+                             tcp-relay.mjs (real browser from WSL), dump-dom.mjs, run-tests.mjs
 ```
 
 Angular's own tools only: **signals**, `HttpClient`, RxJS and forms. No state-management library, no
@@ -137,6 +139,10 @@ The suite covers the parts where a mistake would be invisible until production:
   own promise (series and note at once, or empty with no note);
 - the WebSocket service: the moving window is capped, invalid frames do not enter it, alerts and
   positions accumulate immediately, the socket is closed on `stop()`;
+- the series history: the moving window is capped at 60 points, repeated values are not stored, and
+  **the effect that fills it runs exactly once per metrics change** — the spec for that last point
+  fails if the effect is ever made to read the signal it writes, which is the bug that once blocked
+  the page (see [HANDOFF.md](HANDOFF.md));
 - the URL helpers: `http → ws`, `https → wss`, empty base = page host;
 - the shell: it renders, and it boots with the **real** `appConfig` (so a missing provider fails the
   test instead of silently producing a black page).
@@ -155,7 +161,11 @@ HttpClient en la app: (never answers)           <- does not
 
 The network, the gateway and the WebSocket were all fine at the time (the raw probe in the
 page measures 200s and an open socket in ~250 ms), so the client layer was the only suspect
-left.
+left. `app.config.ts` still registers `provideHttpClient(withFetch())`, but nothing in the app
+injects `HttpClient` any more: it is only there so a future component that reaches for it does not
+fail at bootstrap. **This was not the cause of the panel hang** — that was the effect loop documented
+in [HANDOFF.md](HANDOFF.md), and it survived this change, which is why this paragraph is history
+rather than an explanation.
 
 What the client gives the app, and why it is worth having even without that bug:
 
@@ -184,12 +194,13 @@ gone", and that difference is half the job. So every waiting state has a limit:
 The tests cover the timeout path, the stale-cycle path and the URL in the error text, because
 these are the behaviours that turn a hang into a diagnosis.
 
-### On this machine (WSL + the Windows Chrome)
+### On this machine (WSL + the Windows browser)
 
-There is no Chrome inside WSL. `karma.conf.js` finds the Windows Chrome through WSL interop and
-launches it through [`tools/chrome-wsl.sh`](tools/chrome-wsl.sh), which translates the Linux
-`--user-data-dir=/tmp/...` argument into a Windows path. Without that translation Chrome starts and
-dies with exit code 21, and Karma can only report "Cannot start ChromeHeadless".
+There is no browser inside WSL. `karma.conf.js` finds the Windows browser (Edge, or Chrome if it is
+installed) through WSL interop and launches it through [`tools/chrome-wsl.sh`](tools/chrome-wsl.sh),
+which translates the Linux `--user-data-dir=/tmp/...` argument into a Windows path. Without that
+translation the browser starts and dies with exit code 21, and Karma can only report "Cannot start
+ChromeHeadless".
 
 ```bash
 npm test                                  # uses the wrapper automatically
@@ -211,8 +222,34 @@ itself. It exits non-zero if anything is off.
 
 For a **full per-check report** there is an in-page verification mode, `?verify=1`, which runs the
 same checks from inside the page and prints a PASS/FAIL list. `tools/live-check.ps1` drives it from
-the Windows side (that is where Chrome's debug port is reachable); the report is also readable by
-hand in the page.
+the Windows side (that is where the browser's debug port is reachable); the report is also readable
+by hand in the page.
+
+### Diagnosing a page that does not load data
+
+When the symptom is "the panels stay on `loading`", the only thing that separates *the response
+never arrives* from *the response arrives and the page does not process it* is the browser console
+and the Network tab. `npm run diag:browser` gets both from WSL in one command:
+
+```bash
+npm run build
+npm run diag:browser                      # serves the build, launches Edge, navigates, reloads, reports
+node tools/browser-diag.mjs --fase=15000 --url=http://localhost:4300/?diag=1
+```
+
+It prints the app's own `?diag=1` report every 3 s, every `[aggora]` console line, every HTTP
+response and every network failure — for a **fresh session and for a reload** of the same tab. That
+is how the effect-loop bug documented in [HANDOFF.md](HANDOFF.md) was found.
+
+Two in-page switches help isolate a fault without touching code:
+
+| switch | what it does |
+|---|---|
+| `?solo=live\|metrics\|analytics` | starts a single service, so a hang can be blamed on one of them |
+| `?nodiag=1` | turns the diagnostics repaint off |
+
+A warning learned the hard way: **do not draw conclusions from a single `--dump-dom` run.** It
+samples the page at an arbitrary moment and answers differently on consecutive runs.
 
 ---
 
@@ -279,12 +316,16 @@ Two more things have to be true on the backend side, and neither is done from th
 
 ## Verified against the live backend
 
-Checked with both stacks running (Spring on 8089/8085, Quarkus on 8189/8185) and the app on
-`http://localhost:4200`:
+Checked with both stacks running (Spring on 8089/8085, Quarkus on 8189/8185), the app served by the
+compiled build on `http://localhost:4300` and a **real browser** driven from WSL:
 
-- `ng build` green; `npm test` green (**64 specs**).
+- `ng build` green; `npm test` green (**76 specs**).
 - The app renders with the real backend; the live panels request and receive the catalog for both
   stacks, and `GET /analytics` answers the interactive query.
+- Fresh session: **12 panels `ok`, 2 `empty`** (`transacciones` on purpose), both sockets `open`, the
+  page clock ticking once per second.
+- **Reloading the page behaves exactly like a fresh session.** This used to be the unsolved symptom;
+  the cause and the evidence are in [HANDOFF.md](HANDOFF.md).
 
 Live backend answers that differ from the contract text, recorded rather than hidden:
 
@@ -302,6 +343,7 @@ Live backend answers that differ from the contract text, recorded rather than hi
 - `salud` returns ~85 series, most of them `under-replicated/prueba.*` leftovers at 0. Those are
   collapsed into a count and only the topics above 0 are listed, so the signal is not buried.
 
-No automatic browser test could drive the Windows Chrome from WSL (the debug port is only reachable
-from the Windows side), so the end-to-end check is `npm run verify:live` plus the in-page `?verify=1`
-report; both are in this repository.
+The end-to-end checks are `npm run verify:live` and the in-page `?verify=1` report, plus
+`npm run diag:browser`, which drives the Windows browser from WSL over the debugging protocol
+(`tools/cdp.mjs` + `tools/tcp-relay.mjs`) and reads the console and the network directly. All of them
+are in this repository.

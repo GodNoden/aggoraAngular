@@ -6,10 +6,79 @@ turned out to be about the wrong thing.
 
 ## The one-line version
 
-The dashboard is complete and tested, but in **this machine's environment** the page hangs on
-reload while fetching its panels, and that is not solved. A fresh browser session against the
-production build fills the panels correctly (traces show `respuesta OK pulso spring` and the
-next request going out); a **reload** stops getting answers.
+**The dashboard works, and the bug that made it hang is found, explained, fixed and verified in a
+real browser.** It was a single line: an `effect()` in `SeriesHistoryService` that read its own
+signal and wrote to it, so it re-scheduled itself for ever and never gave the main thread back. The
+network, the gateway, the WebSocket, the proxy and CORS were never the problem.
+
+## The bug, with the evidence
+
+### What was happening
+
+The page painted its header and every panel stayed on `loading` for ever. The traces showed the
+first request going out and coming back `200`, and then the page stopped. On this machine that
+happened on a fresh load *and* on reload, in headless **and** in a real windowed browser.
+
+### How it was found (and how to do it again)
+
+The old handoff said the missing measurement was: *when the page is stuck, is
+`/api/metrics?panel=pulso` `pending` or `200`?* With the tooling below the answer came out as:
+**`200`, and the page never asks for the next panel** — the bridge logs the request, answers it, and
+the app does nothing with it. That already rules the network out.
+
+The decisive measurement was different: **the renderer was blocked, not waiting**. A second tab in
+the same browser answered `Runtime.evaluate` in 2 ms while the dashboard's tab never answered, even
+30 s later. A blocked renderer means a synchronous loop in the page, so the search moved into the
+app. Bisecting by service (`?solo=`) and then by component showed:
+
+| what was on | what happened |
+|---|---|
+| `?solo=live` (sockets only) | responds |
+| `?solo=analytics` | responds |
+| `?solo=metrics` (catalog only) | **blocks the thread** |
+| `?solo=metrics&ver=pulso` / `lag` / `transacciones` | responds |
+| `?solo=metrics&ver=particiones` / `descartes` / `salud` | **blocks** |
+
+The three panels that blocked were exactly the ones that inject `SeriesHistoryService`. Reducing its
+`effect()` to variants settled it:
+
+| effect body | result |
+|---|---|
+| `void this.metrics.panels()` (read the trigger only) | responds |
+| read `panels()`, write `historial` | responds |
+| **read `historial()`, write `historial`** | **blocks** |
+
+### The fix
+
+`src/app/core/series-history.service.ts` keeps the last value per series in a plain (non-signal)
+map, `ultimos`, which is what the effect consults. The effect's only reactive dependency is
+`panels()`, the thing that should trigger it. No `untracked()` needed, no extra machinery, and the
+service also exposes `vueltasDelEfecto` so a runaway effect is visible.
+
+The regression spec (`series-history.service.spec.ts`) pins it down: it asserts the effect runs
+**exactly once** per metrics change. It was verified the honest way — reintroducing the bug makes it
+fail (`Expected 2 to be 1`), restoring the fix makes it pass.
+
+There was a **second, smaller bug** found on the way: `?diag=1` wrote its report by hand into the
+DOM from `ngAfterViewChecked`, and in this Angular version **that hook can stop firing while the
+view keeps refreshing** (measured: the page clock advanced every second, `ngDoCheck` stayed at 2).
+The report froze at the boot state, which is *exactly* what made the first bug look like "the app
+never asks for anything". It is now a signal rendered by the template, so it cannot desynchronise.
+
+### The traces that were misleading, and why
+
+- `curl` returning 200 from WSL says nothing about the browser: it never was a network question.
+- **"The cycle always stops after exactly five requests" was this bug, not a connection cap.** The
+  old notes treated it as a limit being hit. Reading the bridge log by cycles, every cycle was
+  `pulso` (Spring), `pulso` (Quarkus), `/analytics`, `pulso` again and `lag`, and then silence. The
+  sequence is the app working normally and then dying at a fixed point: the response for `pulso`
+  arrives, the effect fires for the first time and loops for ever, and `lag` is simply the last
+  request that had already gone out when the thread was taken away. Nothing was ever "capped"; the
+  page was gone.
+- A single `--dump-dom` run samples the page at an arbitrary moment; it showed the app "stuck" when
+  it had simply not been given time. Use `npm run diag:browser`, which waits and reloads.
+- `?diag=1` froze at boot for its own reason (bug 2 above), so it reported "12 panels loading" while
+  the panels were actually fine. A broken diagnostic is worse than no diagnostic.
 
 ## What this front end consumes from the backend, exactly
 
@@ -129,122 +198,18 @@ That difference has practical consequences, and they are the reason Grafana does
 If the goal is a visual explanation of the backend, the work is **90% editorial and 10% charts**.
 The charts here are hand-written SVG polylines for that reason: they are the smallest part.
 
-## How to approach a rebuild
+## Environment notes that still apply
 
-Do these in order. The first one is not optional, and it is where this attempt lost its way.
-
-1. **Decide and pin down the origin before writing any code.** This is the mistake that cost the
-   most time. This repo lives in WSL and the browser runs on Windows, so `localhost` is not the same
-   host on both sides, and the front end must either be served by the same server as the API or
-   have a proxy in front of both. Pick one and verify it with a plain `fetch` from the browser
-   before building anything:
-   - simplest and closest to production: **serve the static build from the gateway's own origin**
-     (or a reverse proxy in front of both), so every request is same-origin and CORS never enters
-     the picture;
-   - acceptable: a dev proxy, but then confirm the proxy returns bodies the browser can read, and
-     check it with the Network tab rather than with `curl`.
-   Write that decision into the repo README before the first component.
-2. **Build the data layer first, and prove it in a real browser.** One module that fetches the
-   catalog, one that opens the sockets, both with timeouts. Before any styling, open a page that
-   prints the raw values on screen. If the values do not arrive at this point, nothing else matters.
-   Do not debug this through headless runs on this machine (see above): ask a human to read the
-   console and the Network tab.
-3. **Then the panels, one at a time, each with its sentence.** Pulse first, then lag, then dead
-   letters, then health. For each one, write the "what you are seeing" and "why it matters" text
-   *before* the component; that text is the deliverable.
-4. **Lesson mode last**, and only as a reader: the page never runs anything on the backend. A card
-   per lesson with the command to copy, the panel to watch and what should change.
-5. **Keep the honest states from the start**: loading with a limit, empty with the backend's note,
-   error with the endpoint that failed. A dashboard that waits for ever cannot tell "slow" from
-   "gone", and that is half the job.
-
-### What to keep from this attempt
-
-Even if the UI is thrown away, these are worth reading first, because they encode the contract and
-its traps and are not tied to any framework:
-
-- `src/app/core/contract.ts` and `contract.parser.ts`: the whole contract typed, and a parser that
-  never throws and names the field that failed.
-- `src/app/core/panel-docs.ts` and `lessons.ts`: the plain-language content.
-- `src/app/core/live.service.ts`: sockets with increasing backoff, a 60-point window and a handshake
-  watchdog.
-- `src/app/core/metrics.service.ts`: the closed catalog, `nota` preserved, empty versus error.
-- `src/app/core/urls.ts`: the `https → wss` rule and relative-versus-absolute bases.
-
-### What not to repeat
-
-- Do not build the whole UI before proving one request arrives in the browser.
-- Do not trust a single headless run on this machine.
-- Do not let a diagnostic swallow its own error (the probe did, for hours).
-- Do not add panels the catalog does not have, and do not fill in a panel that came back empty.
-
-## What is verified
-
-- `ng build` green. `npm test` green: **71 specs**.
-- The app boots and renders: header, seven panels, lesson mode, stack selector. Verified in a
-  real browser.
-- The network is fine. Measured from inside the browser (the probe in `index.html` paints its
-  own block):
-  - same origin, `/api`, `/q/api`, `/analytics` through the proxy: **HTTP 200** in 100-400 ms.
-  - WebSocket: **opens** in ~250 ms.
-- The backend answers: Spring 8089/8085/8080 and Quarkus 8189/8185 all return 200 when asked
-  with `curl`, from WSL and from Windows.
-- The fetch traces in the app show, in a fresh session: request out, response 200, body read,
-  next panel requested. Panels fill one after another.
-- `tools/serve-verify.mjs` logs every request and every response with its size, which is what
-  finally showed that the gateway answers all of them.
-
-## What is NOT working
-
-**Reloading the page leaves the panels in `loading`.** The requests go out and the bridge logs
-them and answers 200, but the page does not get the responses. Not solved.
-
-Things ruled out, with measurements rather than reasoning:
-
-- **Not the backend.** Every endpoint returns 200 by `curl`, and the WebSocket handshake works.
-- **Not CORS.** Everything is same-origin through the proxy; the only CORS failures are probes
-  that call the backend directly, which is expected and is noise.
-- **Not a change-detection loop.** The counter in `?diag=1` reads `total=0`, `loop=false`.
-- **Not the proxy under load.** Fourteen concurrent requests through it return 200 in 0.4 s
-  (tested repeatedly).
-- **Not `HttpClient` alone.** It never settled (measured: `fetch` 200 in 154 ms, `HttpClient`
-  no answer), which is why there is now a `fetch` client. But the app's own `fetch` shows the
-  same symptom on reload, so this was a real bug but not the whole story.
-- **Not zone.js.** Removed entirely (zoneless) and the symptom stayed.
-
-## What was changed, and which bugs were real
-
-Real bugs found and fixed, each with a spec where it made sense:
-
-1. **`provideHttpClient()` was missing** in `app.config.ts`: the app never bootstrapped and
-   showed a black page. The shell spec now builds with the real `appConfig`, so this class of
-   bug fails the test.
-2. **`metricsUrl` appended `/api` on top of the gateway path** and produced `/api/api/metrics`.
-3. **`analyticsUrl` produced `/analytics/analytics`** (seen in the browser console as a 404).
-4. **No timeouts anywhere.** A panel could wait for ever, which cannot tell "slow" from "gone".
-   Now: 10 s per request, 8 s WebSocket handshake watchdog, hung poll cycles discarded, every
-   error message carries the endpoint.
-5. **The diagnostics never painted**: the probe script runs in `<head>`, before `<body>` exists,
-   so `document.body.appendChild` threw and its own `try/catch` swallowed it.
-6. **The test runner lied twice**: Karma exits 1 here with everything green (the Windows browser
-   disconnects while the server shuts down) and it adds up the counts of several browser
-   connections. `tools/run-tests.mjs` decides from the test summary instead.
-7. **Three bugs in `tools/serve-verify.mjs`** which invalidated hours of measurements: it did
-   not rewrite the path before forwarding, it forwarded the upstream's `Connection` and
-   `Transfer-Encoding` headers (which leaves the browser waiting on a socket that is not its
-   own), and it did not send `Content-Length`.
-
-## The environment, which is the hard part
-
-- The repository lives in **WSL**; the browser runs on **Windows**. `localhost` is not the same
-  host on both sides, so the app must talk to **its own origin** and the server must proxy.
-- The **Angular dev server swallows the responses**: with `ng serve` the panels never fill. That
-  is why the demo is served from the production build instead.
-- There is no Chrome in WSL and no Chrome on Windows any more (uninstalled on purpose). Edge is
-  used, and `karma.conf.js` looks for it.
-- **Headless is not trustworthy here.** With `--dump-dom` the same build answers in one run and
-  not in the next, while `curl` always works. Do not draw conclusions from a single headless run;
-  ask a human to look at the browser console instead. That mistake cost most of the time.
+- The repository lives in **WSL**; the browser can run on **Windows**. `localhost` is not the same
+  host on both sides, which is why the app talks to **its own origin** and the server proxies:
+  `proxy.conf.json` in development, `tools/serve-verify.mjs` for the compiled build.
+- There is **no Chrome in WSL and none on Windows** any more. Edge is used, and everything (Karma,
+  the live check, the browser diagnostics) finds it through `tools/`.
+- **The browser's debug port on Windows is not reachable from WSL.** WSL2 forwards `localhost` one
+  way only (Windows → WSL). `tools/tcp-relay.mjs` bridges it with a PowerShell pipe, which is what
+  makes `npm run diag:browser` work from this side.
+- **Do not conclude anything from a single headless run.** `--dump-dom` in particular returns
+  before the page has done its work.
 
 ## How to look at it now
 
@@ -253,47 +218,87 @@ npm run build
 npm run serve:built        # serves the build and proxies /api, /q, /analytics, /actuator and the WebSockets on :4300
 ```
 
-Open `http://localhost:4300/?diag=1`. In the console, the traces tell the story:
+Open `http://localhost:4300/?diag=1`. The page prints its own report at the bottom (panel states,
+socket states, and the raw network probe that runs before Angular). Useful switches:
 
-- `[aggora] fetch lanzado <url>` — the request went out.
-- `[aggora] fetch respondio <url> 200` — the response arrived.
-- `[aggora] respuesta OK <panel> <stack> <ms>` — the panel was filled.
-- `[aggora] fetch fallo <url> <error>` — it failed, with the URL.
+| switch | what it does |
+|---|---|
+| `?diag=1` | shows the diagnostics block |
+| `?nodiag=1` | turns the diagnostics repaint off |
+| `?solo=live\|metrics\|analytics` | starts a single service (this is how the bug above was isolated) |
+| `?verify=1` | in-page PASS/FAIL verification report against the live backend |
 
-`?diag=1` also prints a block in the page: change-detection cycles, panel states by status,
-socket states, messages parsed, discarded cycles, and the raw network probe.
+And the full browser diagnosis, console and Network tab included, from WSL:
 
-## What I would try next, in order (to fix this attempt)
+```bash
+npm run diag:browser                     # serves, launches Edge, relays CDP, navigates, reloads, reports
+node tools/browser-diag.mjs --fase=15000 --url=http://localhost:4300/?diag=1
+```
 
-If the plan is to **rebuild**, go to "How to approach a rebuild" above instead: pinning down the
-origin first is the step that was skipped here, and it would have avoided most of this list.
+It prints the app's own report after 3/6/9 s, the `[aggora]` console lines, every HTTP response and
+every network failure, then reloads the same tab and does it again. That is the evidence this
+repository was missing for hours.
 
-1. **Reproduce it in a real browser and read the Network tab.** Specifically: is
-   `/api/metrics?panel=pulso` `pending` or `200`? That single answer splits the problem in two
-   and it was never obtained. Everything else was guessing around it.
-2. **Explain why the cycle stops after exactly five requests.** From the bridge log, every cycle
-   is the same five requests and then silence, never reaching `particiones`:
+## What is verified
 
-   ```
-   /api/metrics?panel=pulso            -> 200
-   /q/api/metrics?panel=pulso          -> 200
-   /analytics?...                      -> 200
-   /api/metrics?panel=pulso&_t=...     -> 200
-   /api/metrics?panel=lag&_t=...       -> 200   <- and the cycle ends here
-   ```
+- `ng build` green. `npm test` green: **76 specs**. (Karma may report a bigger number because it
+  adds up connections from more than one browser; `tools/run-tests.mjs` reports the real size.)
+- In a real browser against the live backend, measured with `npm run diag:browser`:
+  - fresh session: **12 panels `ok`, 2 `empty`** (`transacciones` on purpose), both sockets `open`,
+    the page clock ticking once per second, ~133 WebSocket messages parsed in 9 s;
+  - **reload behaves exactly like a fresh session** (the same 12/2 within 3 s);
+  - the panels converge and stay converged, and the catalog answers 200 for both stacks.
+- The regression spec fails if the bug is reintroduced (`Expected 2 to be 1`), so it is a real
+  guard and not decoration.
 
-   It is deterministic, not random, so there is a concrete limit being hit at five: a browser
-   connection cap, something in the bridge, or the page being reloaded mid-cycle. This is the
-   sharpest lead available and it is worth starting here.
-3. **Reload with the probe disabled.** The probe in `index.html` opens fetches and a WebSocket
-   of its own at page load. It is the only thing that runs in the fresh session which does not
-   run again on reload in the same way. Remove it and see whether the reload symptom changes.
-4. **Serve the app from the backend's origin.** The deployment plan is "one origin, gateway in
-   front" anyway. If the page and the API are literally the same server, this whole class of
-   problem disappears, and it is what has to happen in production regardless.
-5. **Drop the proxy from the picture** by configuring absolute backend URLs and adding
-   `http://localhost:4300` to the backend's CORS allowlist (`aggora.ui.allowed-origins`), then
-   compare.
+## What is still open (not bugs, choices)
+
+1. **`ngDoCheck` / `ngAfterViewChecked` on the root component did not run** in this Angular version
+   while the view kept refreshing. The app no longer depends on them for anything (the diagnostics
+   use the page clock), but if you plan to add lifecycle logic to `App`, measure it first: a
+   `console.info` in the hook plus `npm run diag:browser` settles it in a minute. A minimal
+   reproduction would be worth filing.
+2. **The dev server** (`ng serve`, `proxy.conf.json`) was not re-verified after the fix. The demo
+   path is the compiled build behind `serve:built`. If you use `ng serve`, check that the panels
+   fill before trusting it.
+3. **The Quarkus analytics URL in production** is hardcoded to `http://localhost:8185`
+   (`environment.production.ts`), which is cross-origin and will not work behind a tunnel. Leave it
+   empty or point it at the published origin before publishing.
+4. **No authentication.** CORS is not authentication: `curl` reads every endpoint. See the README.
+
+## What was changed, and which bugs were real
+
+Real bugs found and fixed, each with a spec where it made sense:
+
+1. **`SeriesHistoryService`'s effect read and wrote its own signal**, blocking the main thread for
+   ever. This is the bug in the one-line version at the top. Fixed with a non-signal map
+   (`ultimos`), plus a spec that fails if it comes back.
+2. **`?diag=1` depended on `ngAfterViewChecked`**, which stopped firing while the view kept
+   refreshing, so the report froze at the boot state and hid bug 1. The report is now a signal
+   rendered by the template.
+3. `provideHttpClient()` was missing in `app.config.ts`: the app never bootstrapped and showed a
+   black page.
+4. `metricsUrl` appended `/api` on top of the gateway path and produced `/api/api/metrics`.
+5. `analyticsUrl` produced `/analytics/analytics` (seen in the browser console as a 404).
+6. No timeouts anywhere. Now: 10 s per request, 8 s WebSocket handshake watchdog, hung poll cycles
+   discarded, every error message carries the endpoint.
+7. The diagnostics never painted: the probe script runs in `<head>`, before `<body>` exists, so
+   `document.body.appendChild` threw and its own `try/catch` swallowed it.
+8. The test runner lied twice: Karma exits 1 here with everything green, and it adds up the counts
+   of several browser connections. `tools/run-tests.mjs` decides from the test summary instead.
+9. Three bugs in `tools/serve-verify.mjs`: it did not rewrite the path before forwarding, it
+   forwarded the upstream's `Connection` and `Transfer-Encoding` headers, and it did not send
+   `Content-Length`.
+
+### What not to repeat
+
+- Do not debug a blocked page through `--dump-dom` or a single headless run; use
+  `npm run diag:browser`, which waits and reads the app's own report.
+- Do not write the DOM by hand from a lifecycle hook. Use a signal and a template binding.
+- **Never read a signal inside the effect that writes it.** If the effect needs its own state, keep
+  it in a plain field.
+- Do not let a diagnostic swallow its own error (the probe did, for hours).
+- Do not add panels the catalog does not have, and do not fill in a panel that came back empty.
 
 ## What is genuinely good in here, if you start over
 
@@ -304,6 +309,11 @@ origin first is the step that was skipped here, and it would have avoided most o
   handshake watchdog, signals.
 - `core/metrics.service.ts`: the closed catalog, the `nota` preserved verbatim, empty versus
   error, per-request timeout, hung-cycle discard.
+- `core/series-history.service.ts`: the moving window, with the trap documented in the header so
+  nobody repeats it.
 - `core/panel-docs.ts` and `core/lessons.ts`: the plain-language explanation of every panel and
   the five lessons. That content is the point of the dashboard and is not tied to any framework.
 - `core/urls.ts`: the `https → wss` rule and relative-versus-absolute bases, with specs.
+- `tools/`: `serve-verify.mjs` (one-origin bridge), `browser-diag.mjs` + `cdp.mjs` + `tcp-relay.mjs`
+  (real browser, real console, real Network tab, from WSL), `dump-dom.mjs` (quick DOM dump),
+  `run-tests.mjs` (an honest exit code).
