@@ -2,10 +2,61 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>AggoraDashboard</title>
+  <title>Aggora · Kafka pipeline dashboard</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Read-only dashboard for the Aggora Kafka pipeline: the same event pipeline in Spring Boot and Quarkus, side by side.">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <script>
+    /*
+     * Red de seguridad de arranque.
+     *
+     * Si Angular no llega a pintar (un error de runtime, un modulo que no carga), sin esto la pagina
+     * se queda en negro y no dice nada: lo peor posible para diagnosticar, y ademas el navegador ya
+     * no se puede pilotar desde fuera en este equipo. Aqui se deja constancia en el DOM, que es
+     * legible tanto por una persona como por la comprobacion automatica.
+     */
+    (function () {
+      var fallos = [];
+      function dejarConstancia(motivo) {
+        fallos.push(motivo);
+        try {
+          var pre = document.getElementById('boot-errors');
+          if (!pre) {
+            pre = document.createElement('pre');
+            pre.id = 'boot-errors';
+            pre.setAttribute('data-boot', 'fail');
+            pre.style.cssText =
+              'margin:16px;padding:12px;border:1px solid #7f1d1d;border-radius:8px;' +
+              'background:#1b1114;color:#ffb4c0;font:12px/1.5 monospace;white-space:pre-wrap;';
+            document.body.appendChild(pre);
+          }
+          pre.textContent = 'The dashboard did not start:\n' + fallos.join('\n');
+        } catch (e) {
+          /* Si ni esto funciona, no hay nada que hacer. */
+        }
+      }
+      window.addEventListener('error', function (evento) {
+        var objetivo = evento.target;
+        if (objetivo && objetivo !== window && objetivo.tagName) {
+          dejarConstancia('failed to load ' + objetivo.tagName.toLowerCase() + ': ' + (objetivo.src || objetivo.href || '?'));
+          return;
+        }
+        dejarConstancia((evento.message || 'error') + ' @ ' + (evento.filename || '?') + ':' + (evento.lineno || 0));
+      }, true);
+      window.addEventListener('unhandledrejection', function (evento) {
+        var razon = evento.reason;
+        dejarConstancia('unhandled rejection: ' + (razon && razon.message ? razon.message : String(razon)));
+      });
+      // Si a los 20 s no hay nada pintado, se dice: mejor un aviso que una pantalla negra.
+      setTimeout(function () {
+        var raiz = document.querySelector('app-root');
+        if (raiz && raiz.children.length === 0 && fallos.length === 0) {
+          dejarConstancia('Angular produced no output after 20s (no exception was thrown)');
+        }
+      }, 20000);
+    })();
+  </script>
 </head>
 <body>
   <app-root></app-root>
