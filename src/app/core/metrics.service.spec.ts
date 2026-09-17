@@ -74,8 +74,12 @@ describe('MetricsService', () => {
     // 6 paneles x 2 stacks + 1 comparativa x 2 stacks
     expect(peticiones.length).toBe(14);
     for (const panel of ['pulso', 'lag', 'particiones', 'transacciones', 'descartes', 'salud']) {
-      expect(urls.some((url) => url.includes(`panel=${panel}`) && url.includes('8089'))).toBeTrue();
-      expect(urls.some((url) => url.includes(`panel=${panel}`) && url.includes('8189'))).toBeTrue();
+      expect(
+        urls.some((url) => url.includes(`panel=${panel}`) && url.includes(environment.spring.gateway)),
+      ).toBeTrue();
+      expect(
+        urls.some((url) => url.includes(`panel=${panel}`) && url.includes(environment.quarkus.gateway)),
+      ).toBeTrue();
     }
     expect(
       urls.some((url) => url.includes('panel=comparativa') && url.includes('de=pulso')),
@@ -132,7 +136,10 @@ describe('MetricsService', () => {
     const enVuelo = servicio.refreshAll();
     await Promise.resolve();
     for (const peticion of http.match(() => true)) {
-      if (peticion.request.urlWithParams.includes('panel=salud')) {
+      if (!peticion.request.urlWithParams.includes(environment.spring.gateway)) {
+        // El otro stack responde bien: asi se comprueba que un panel caido no arrastra al resto.
+        peticion.flush(respuesta('x', [{ label: 'a', points: [[1, 1]] }]));
+      } else if (peticion.request.urlWithParams.includes('panel=salud')) {
         peticion.flush(
           { error: 'prometheus no responde', detalle: 'timeout' },
           { status: 502, statusText: 'Bad Gateway' },
@@ -171,11 +178,11 @@ describe('MetricsService', () => {
     expect(estado.note).toContain('pulso, lag, salud');
   });
 
-  it('un gateway apagado (status 0) lo dice con la URL del stack', async () => {
+  it('un gateway apagado (status 0) lo dice con la ruta del stack', async () => {
     const enVuelo = servicio.refreshAll();
     await Promise.resolve();
     for (const peticion of http.match(() => true)) {
-      if (peticion.request.urlWithParams.includes('8189')) {
+      if (peticion.request.urlWithParams.includes(environment.quarkus.gateway)) {
         peticion.error(new ProgressEvent('error'));
       } else {
         peticion.flush(respuesta('x', [], 'n'));
@@ -184,7 +191,8 @@ describe('MetricsService', () => {
     await enVuelo;
     const estado = servicio.panel('pulso', 'quarkus');
     expect(estado.status).toBe('error');
-    expect(estado.note).toContain('8189');
+    // El aviso dice a donde llamo: es la ruta del gateway de Quarkus, no un puerto suelto.
+    expect(estado.note).toContain(environment.quarkus.gateway);
     expect(estado.note).toContain('CORS');
   });
 

@@ -268,6 +268,19 @@
   </section>
 }
 
+@if (modoDiag) {
+  <section class="verify-section">
+    <header class="section-head">
+      <h2>Diagnostics (?diag=1)</h2>
+      <p>
+        Change detection cycles, panel states and socket states, readable without the browser
+        console. If the cycle count climbs into the thousands per second, the main thread is in a
+        loop and that is why nothing else runs.
+      </p>
+    </header>
+  </section>
+}
+
 <footer class="page-foot">
   <p>
     Read-only, on purpose. There is no write endpoint anywhere in this contract: the page observes and

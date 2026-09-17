@@ -1,9 +1,16 @@
 /**
- * Configuracion por entorno: las URLs base de los dos stacks, en un solo sitio.
+ * Configuracion por entorno: las rutas de los dos stacks, en un solo sitio.
  *
- * El backend corre en un devcontainer con los puertos reenviados al host, por eso el navegador los
- * ve como `localhost`. Para publicar, se copia `environment.production.ts` y se cambian las URLs
- * por las del gateway publico (ver README, seccion "Publishing").
+ * **Todo es del mismo origen que la pagina**, y eso es a proposito. En desarrollo la app la sirve
+ * `ng serve` en `localhost:4200` y el dev server hace de proxy hacia los servicios
+ * (`proxy.conf.json`): `/api` -> Spring 8089, `/api-q` -> Quarkus 8189, `/analytics` -> 8085,
+ * `/ws` y `/ws-q` -> los dos WebSocket.
+ *
+ * Por que no se apunta directamente a `localhost:8089`: porque el navegador no siempre corre en la
+ * misma maquina que el codigo. Aqui la app vive en WSL y el navegador es el de Windows, y desde ahi
+ * `localhost:8089` **no** es el host donde escucha el gateway. Con el proxy, el navegador solo habla
+ * con `localhost:4200` y el salto lo da el dev server, que si esta en el mismo sitio que el backend.
+ * De propina, en desarrollo no hace falta CORS.
  */
 
 import { StackEndpoints } from '../app/core/contract';
@@ -29,17 +36,21 @@ export const environment: Environment = {
   production: false,
   spring: {
     label: 'Spring',
-    gateway: 'http://localhost:8089',
-    analytics: 'http://localhost:8085',
-    health: 'http://localhost:8080',
-    healthPath: '/actuator/health',
+    gateway: '/api',
+    analytics: '/analytics',
+    health: '/actuator',
+    healthPath: '/health',
+    wsPath: '/ws',
   },
   quarkus: {
     label: 'Quarkus',
-    gateway: 'http://localhost:8189',
+    gateway: '/q/api',
+    // La consulta interactiva de Quarkus es el servicio del 8185, no su gateway: va por URL
+    // completa (en produccion, la del reverse proxy que la publique).
     analytics: 'http://localhost:8185',
-    health: 'http://localhost:8189',
+    health: '/q',
     healthPath: '/q/health',
+    wsPath: '/q/ws',
   },
   metricsIntervalMs: 5000,
   tickWindow: 60,

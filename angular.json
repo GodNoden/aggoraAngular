@@ -59,13 +59,18 @@
           "builder": "@angular/build:dev-server",
           "configurations": {
             "production": {
-              "buildTarget": "aggora-dashboard:build:production"
+              "buildTarget": "aggora-dashboard:build:production",
+              "proxyConfig": "proxy.conf.json"
             },
             "development": {
-              "buildTarget": "aggora-dashboard:build:development"
+              "buildTarget": "aggora-dashboard:build:development",
+              "proxyConfig": "proxy.conf.json"
             }
           },
-          "defaultConfiguration": "development"
+          "defaultConfiguration": "development",
+          "options": {
+            "proxyConfig": "proxy.conf.json"
+          }
         },
         "extract-i18n": {
           "builder": "@angular/build:extract-i18n"

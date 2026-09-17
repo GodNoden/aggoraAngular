@@ -1,0 +1,35 @@
+{
+  "/q": {
+    "target": "http://localhost:8189",
+    "secure": false,
+    "changeOrigin": true,
+    "ws": true,
+    "pathRewrite": { "^/q": "" },
+    "logLevel": "warn"
+  },
+  "/api": {
+    "target": "http://localhost:8089",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "warn"
+  },
+  "/analytics": {
+    "target": "http://localhost:8085",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "warn"
+  },
+  "/actuator": {
+    "target": "http://localhost:8080",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "warn"
+  },
+  "/ws": {
+    "target": "ws://localhost:8089",
+    "secure": false,
+    "changeOrigin": true,
+    "ws": true,
+    "logLevel": "warn"
+  }
+}

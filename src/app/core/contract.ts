@@ -34,6 +34,15 @@ export interface StackEndpoints {
   readonly health: string;
   /** Ruta de la sonda dentro de `health`. */
   readonly healthPath: string;
+  /**
+   * Ruta del WebSocket de eventos.
+   *
+   * Es una ruta y no una URL completa a proposito: en desarrollo la app habla con **su propio
+   * origen** y el dev server hace de proxy (ver `proxy.conf.json`), asi el navegador no tiene que
+   * saltar de `localhost:4200` a `localhost:8089`. Ese salto es lo que fallaba en este equipo: la
+   * app la sirve WSL y el navegador corre en Windows, y ahi `localhost:8089` no es el mismo host.
+   */
+  readonly wsPath: string;
 }
 
 /** Sobre comun a los tres mensajes del WebSocket. */

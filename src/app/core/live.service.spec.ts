@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { LiveService } from './live.service';
 import { environment } from '../../environments/environment';
+import { wsUrl } from './urls';
 
 /**
  * La ventana movil del WebSocket.
@@ -69,19 +70,20 @@ describe('LiveService', () => {
     return { servicio, sockets: WebSocketFalso.instancias };
   }
 
-  it('abre un socket por stack, con la URL del contrato', () => {
+  it('abre un socket por stack, con la ruta del contrato en el mismo origen', () => {
     const { sockets } = crear();
     expect(sockets.length).toBe(2);
-    const urls = sockets.map((socket) => socket.url).sort();
-    expect(urls[0]).toContain('/ws');
-    expect(urls[1]).toContain('/ws');
-    expect(urls.some((url) => url.includes('8089'))).toBeTrue();
-    expect(sockets.some((url) => url.url.includes('8189'))).toBeTrue();
+    // Las rutas salen del entorno: en desarrollo son del mismo origen y el dev server hace de proxy.
+    const urls = sockets.map((socket) => socket.url);
+    expect(urls).toContain(wsUrl(environment.spring));
+    expect(urls).toContain(wsUrl(environment.quarkus));
+    // Y son rutas distintas: cada stack tiene su socket.
+    expect(new Set(urls).size).toBe(2);
   });
 
   it('guarda la ventana movil de los snapshots', () => {
     const { servicio, sockets } = crear();
-    const spring = sockets.find((socket) => socket.url.includes('8089'))!;
+    const spring = sockets.find((socket) => socket.url === wsUrl(environment.spring))!;
     spring.abrir();
     spring.emitir(snapshot(10, 2, '2026-09-17T08:00:00Z'));
     spring.emitir(snapshot(20, 3, '2026-09-17T08:00:01Z'));
@@ -98,7 +100,7 @@ describe('LiveService', () => {
 
   it('corta la ventana en tickWindow: no crece sin fin', () => {
     const { servicio, sockets } = crear();
-    const spring = sockets.find((socket) => socket.url.includes('8089'))!;
+    const spring = sockets.find((socket) => socket.url === wsUrl(environment.spring))!;
     spring.abrir();
     for (let i = 0; i < environment.tickWindow + 25; i += 1) {
       spring.emitir(snapshot(i, 1, `2026-09-17T08:00:${String(i % 60).padStart(2, '0')}Z`));
@@ -111,7 +113,7 @@ describe('LiveService', () => {
 
   it('un frame invalido no entra en la ventana y deja un error explicado', () => {
     const { servicio, sockets } = crear();
-    const spring = sockets.find((socket) => socket.url.includes('8089'))!;
+    const spring = sockets.find((socket) => socket.url === wsUrl(environment.spring))!;
     spring.abrir();
     spring.emitir(snapshot(10, 2, '2026-09-17T08:00:00Z'));
     spring.emitir('<html>502</html>');
@@ -127,7 +129,7 @@ describe('LiveService', () => {
 
   it('acumula alertas y posiciones al momento, sin esperar al segundo', () => {
     const { servicio, sockets } = crear();
-    const spring = sockets.find((socket) => socket.url.includes('8089'))!;
+    const spring = sockets.find((socket) => socket.url === wsUrl(environment.spring))!;
     spring.abrir();
     spring.emitir({
       v: 1,
@@ -165,7 +167,7 @@ describe('LiveService', () => {
 
   it('reemplaza la posicion de la misma cuenta y simbolo en vez de duplicarla', () => {
     const { servicio, sockets } = crear();
-    const spring = sockets.find((socket) => socket.url.includes('8089'))!;
+    const spring = sockets.find((socket) => socket.url === wsUrl(environment.spring))!;
     spring.abrir();
     const base = {
       v: 1,
@@ -197,7 +199,7 @@ describe('LiveService', () => {
 
   it('al cerrarse un socket pasa a reconnecting y suma el intento', () => {
     const { servicio, sockets } = crear();
-    const spring = sockets.find((socket) => socket.url.includes('8089'))!;
+    const spring = sockets.find((socket) => socket.url === wsUrl(environment.spring))!;
     spring.abrir();
     spring.close();
     const estado = servicio.live().spring;

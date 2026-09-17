@@ -1,6 +1,8 @@
 import {
+  AfterViewChecked,
   ChangeDetectionStrategy,
   Component,
+  DoCheck,
   OnDestroy,
   computed,
   inject,
@@ -91,7 +93,7 @@ const SLOTS: readonly PanelSlot[] = [
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
-export class App implements OnDestroy {
+export class App implements OnDestroy, DoCheck, AfterViewChecked {
   protected readonly live = inject(LiveService);
   protected readonly metrics = inject(MetricsService);
   protected readonly analytics = inject(AnalyticsService);
@@ -117,7 +119,112 @@ export class App implements OnDestroy {
 
   private readonly latido = setInterval(() => this.reloj.set(Date.now()), 1000);
 
+  /**
+   * Cuantas veces se ha ejecutado la deteccion de cambios.
+   *
+   * Existe para diagnosticar un sintoma concreto: si la pagina se queda colgada y los datos no
+   * llegan, la causa mas probable es un bucle de deteccion de cambios que satura el hilo principal y
+   * deja sin turno a las respuestas HTTP. Se puede leer desde fuera en `<pre id="diag-report">` y con
+   * `?diag=1`. No se usa para nada mas.
+   */
+  private readonly ciclos = signal(0);
+  private readonly lineasDiag = signal<readonly string[]>([]);
+  private inicioVentana = Date.now();
+  private ciclosEnVentana = 0;
+  /** Bucle de deteccion de cambios detectado: solo puede ser un bug de la app. */
+  readonly bucleDetectado = signal(false);
+
+  ngDoCheck(): void {
+    this.ciclosEnVentana += 1;
+    const ahora = Date.now();
+    if (ahora - this.inicioVentana > 1000) {
+      const porSegundo = this.ciclosEnVentana;
+      this.inicioVentana = ahora;
+      this.ciclosEnVentana = 0;
+      this.ciclos.update((valor) => valor + porSegundo);
+      if (porSegundo > 200 && !this.bucleDetectado()) {
+        this.bucleDetectado.set(true);
+      }
+      this.actualizarDiag(porSegundo);
+    }
+  }
+
+  ngAfterViewChecked(): void {
+    this.actualizarDiag(null);
+  }
+
+  /** Informe de diagnostico en el DOM, legible sin abrir la consola. */
+  private actualizarDiag(ciclosPorSegundo: number | null): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    let pre = document.getElementById('diag-report');
+    if (!pre && !this.modoDiag) {
+      return;
+    }
+    if (!pre) {
+      pre = document.createElement('pre');
+      pre.id = 'diag-report';
+      pre.style.cssText =
+        'margin:12px;padding:10px;border:1px solid #7f1d1d;border-radius:8px;background:#120d14;' +
+        'color:#ffd9a0;font:11px/1.5 monospace;white-space:pre-wrap;';
+      document.body.appendChild(pre);
+    }
+    const paneles = Object.values(this.metrics.panels());
+    const porEstado: Record<string, number> = {};
+    for (const panel of paneles) {
+      porEstado[panel.status] = (porEstado[panel.status] ?? 0) + 1;
+    }
+    const lineas = [
+      `change detection: total=${this.ciclos()}${ciclosPorSegundo !== null ? ` (last second: ${ciclosPorSegundo})` : ''}`,
+      `loop detected: ${this.bucleDetectado()}`,
+      `panels: ${JSON.stringify(porEstado)}`,
+      `socket spring: ${this.live.live().spring.state} | quarkus: ${this.live.live().quarkus.state}`,
+      `messages parsed: ${this.live.messageCount()}`,
+      `backend from the browser: ${this.backendReachable()}`,
+      ...this.lineasDiag(),
+    ];
+    pre.textContent = lineas.join('\n');
+  }
+
+  /** Si el navegador puede hablar con el gateway, medido desde el propio navegador. */
+  private readonly backendReachable = signal<string>('not measured');
+
+  /**
+   * Mide si el navegador alcanza el gateway, que NO es lo mismo que si lo alcanza la terminal.
+   *
+   * Este es el diagnostico que faltaba: cuando la pagina vive en un sitio y el backend en otro
+   * (aqui: la app la sirve WSL y el navegador es el de Windows), la red del navegador puede no ver
+   * `localhost:8089` aunque `curl` si lo vea. Se mide con una peticion de verdad y con tiempo limite.
+   */
+  async medirBackend(): Promise<void> {
+    // Primero una URL del mismo origen (sirve el propio dev server): sirve de control para saber si
+    // el problema es la red del navegador o solo el salto a otro puerto.
+    const urls = [location.origin + '/favicon.ico', this.origen('pulso', 'spring')];
+    for (const url of urls) {
+      const inicio = Date.now();
+      try {
+        const control = new AbortController();
+        const limite = setTimeout(() => control.abort(), 4000);
+        const respuesta = await fetch(url, { signal: control.signal });
+        clearTimeout(limite);
+        // Se lee el cuerpo: si el cuerpo no llega, la peticion no sirve de nada.
+        const texto = await respuesta.text();
+        this.backendReachable.set(`${url} -> HTTP ${respuesta.status}, ${texto.length} B en ${Date.now() - inicio} ms`);
+        return;
+      } catch (error) {
+        this.backendReachable.set(`${url} -> FALLO en ${Date.now() - inicio} ms: ${String(error)}`);
+      }
+    }
+  }
+
+  /** Permite anotar lineas en el informe de diagnostico desde los servicios. */
+  anotarDiag(linea: string): void {
+    this.lineasDiag.update((actuales) => [...actuales, linea]);
+  }
+
   constructor() {
+    void this.medirBackend();
     this.live.start();
     this.metrics.start();
     void this.analytics.query(
@@ -289,4 +396,8 @@ export class App implements OnDestroy {
    */
   readonly modoVerificacion =
     typeof location !== 'undefined' && new URLSearchParams(location.search).has('verify');
+
+  /** Informe de diagnostico visible en la pagina (`?diag=1`). */
+  readonly modoDiag =
+    typeof location !== 'undefined' && new URLSearchParams(location.search).has('diag');
 }

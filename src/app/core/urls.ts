@@ -34,10 +34,15 @@ export function pageContext(): PageContext {
  * dashboard comparten dominio, y evita recompilar al cambiar de dominio.
  */
 export function httpBase(base: string, page: PageContext = pageContext()): string {
-  if (base) {
-    return base.replace(/\/+$/, '');
+  if (!base) {
+    return page.origin;
   }
-  return page.origin;
+  // Una ruta relativa ("/api") se resuelve contra el origen de la pagina: es lo normal en
+  // desarrollo, donde el dev server hace de proxy y todo es del mismo origen.
+  if (base.startsWith('/')) {
+    return `${page.origin}${base}`.replace(/\/+$/, '');
+  }
+  return base.replace(/\/+$/, '');
 }
 
 /**
@@ -59,9 +64,20 @@ export function wsBase(base: string, page: PageContext = pageContext()): string 
   return url.origin;
 }
 
-/** URL completa del WebSocket de eventos de un stack. */
+/**
+ * URL completa del WebSocket de eventos de un stack.
+ *
+ * `wsPath` es una ruta del mismo origen de la pagina; si algun dia el gateway vive en otro host,
+ * `wsPath` puede ser una URL absoluta y `wsBase` se encarga del esquema.
+ */
 export function wsUrl(endpoints: StackEndpoints, page: PageContext = pageContext()): string {
-  return `${wsBase(endpoints.gateway, page)}/ws`;
+  if (/^wss?:\/\//i.test(endpoints.wsPath)) {
+    return endpoints.wsPath;
+  }
+  if (/^https?:\/\//i.test(endpoints.wsPath)) {
+    return `${wsBase(endpoints.wsPath, page)}${new URL(endpoints.wsPath).pathname}`;
+  }
+  return `${wsBase('', page)}${endpoints.wsPath}`;
 }
 
 /** URL de la consulta interactiva del state store. */
@@ -89,7 +105,9 @@ export function metricsUrl(
   if (de) {
     params.set('de', de);
   }
-  return `${httpBase(endpoints.gateway)}/api/metrics?${params.toString()}`;
+  // `gateway` ya es la base del catalogo (en desarrollo "/api", que resuelve el proxy del dev
+  // server). Antes se le anadia otro "/api" y salia /api/api/metrics: el test lo cazo.
+  return `${httpBase(endpoints.gateway)}/metrics?${params.toString()}`;
 }
 
 /** Etiqueta legible de un stack. */
