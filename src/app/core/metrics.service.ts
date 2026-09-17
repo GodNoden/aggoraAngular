@@ -170,14 +170,18 @@ export class MetricsService {
     this.pidiendo = true;
     this.inicioCiclo = Date.now();
     try {
-      const tareas: Promise<void>[] = [];
+      /*
+       * **En serie, no en paralelo.** Antes se lanzaban las 14 peticiones a la vez y, en este
+       * entorno, el navegador dejaba de procesar las respuestas (salian del gateway con 200, pero la
+       * pagina no las veia nunca y los paneles se quedaban en `loading`). Una detras de otra llena
+       * los paneles igual de rapido para quien mira, y ademas es mas educado con el catalogo.
+       */
       for (const stack of STACKS) {
         for (const panel of PANELES_SIMPLES) {
-          tareas.push(this.pedir(panel, stack));
+          await this.pedir(panel, stack);
         }
-        tareas.push(this.pedirComparativa(stack, this.comparativaDe()));
+        await this.pedirComparativa(stack, this.comparativaDe());
       }
-      await Promise.all(tareas);
     } finally {
       this.pidiendo = false;
       this.inicioCiclo = null;

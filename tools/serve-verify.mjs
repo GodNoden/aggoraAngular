@@ -25,14 +25,24 @@ import { join, extname, normalize } from 'node:path';
 const PUERTO = Number(process.argv[2] ?? 4300);
 const RAIZ = join(process.cwd(), 'dist/aggora-dashboard/browser');
 
-/** A donde va cada prefijo. El orden importa: /q/api antes que /api. */
+/**
+ * A donde va cada prefijo.
+ *
+ *   prefijo   lo que pide el navegador (mismo origen)
+ *   puerto    el servicio que lo atiende
+ *   reenviar  la ruta que se le manda a ese servicio (el prefijo se sustituye por esto)
+ *
+ * El orden importa: `/q/ws` y `/q` antes que `/api`, porque `/q/...` tambien empieza por `/q`.
+ */
 const RUTAS = [
-  { prefijo: '/q/ws', destino: { host: 'localhost', port: 8189 }, ws: true, quitar: '/q' },
-  { prefijo: '/q', destino: { host: 'localhost', port: 8189 }, quitar: '/q' },
-  { prefijo: '/ws', destino: { host: 'localhost', port: 8089 }, ws: true },
-  { prefijo: '/api', destino: { host: 'localhost', port: 8089 } },
-  { prefijo: '/analytics', destino: { host: 'localhost', port: 8085 } },
-  { prefijo: '/actuator', destino: { host: 'localhost', port: 8080 } },
+  // Quarkus: su gateway ya habla /api y /ws, asi que el prefijo solo sirve para elegir a quien ir.
+  { prefijo: '/q/ws', puerto: 8189, reenviar: '/ws', ws: true },
+  { prefijo: '/q/api', puerto: 8189, reenviar: '/api' },
+  { prefijo: '/q', puerto: 8189, reenviar: '' },
+  { prefijo: '/ws', puerto: 8089, reenviar: '/ws', ws: true },
+  { prefijo: '/api', puerto: 8089, reenviar: '/api' },
+  { prefijo: '/analytics', puerto: 8085, reenviar: '/analytics' },
+  { prefijo: '/actuator', puerto: 8080, reenviar: '/actuator' },
 ];
 
 const TIPOS = {
@@ -52,14 +62,17 @@ function rutaDe(url) {
 
 /** Reenvia una peticion HTTP normal. */
 function proxyHttp(peticion, respuesta, ruta) {
-  const destino = ruta.quitar ? peticion.url.replace(ruta.quitar, '') : peticion.url;
+  console.log(`[bridge] -> ${peticion.method} ${peticion.url}`);
+  // El prefijo del puente se sustituye por el que espera el servicio.
+  const resto = (peticion.url ?? '/').slice(ruta.prefijo.length);
+  const destino = `${ruta.reenviar}${resto}`;
   const salida = httpRequest(
     {
-      host: ruta.destino.host,
-      port: ruta.destino.port,
+      host: 'localhost',
+      port: ruta.puerto,
       path: destino,
       method: peticion.method,
-      headers: { ...peticion.headers, host: `${ruta.destino.host}:${ruta.destino.port}`, connection: 'close' },
+      headers: { ...peticion.headers, host: `localhost:${ruta.puerto}`, connection: 'close' },
       /*
        * `agent: false`: una conexion nueva por peticion, sin keep-alive.
        *
@@ -71,12 +84,43 @@ function proxyHttp(peticion, respuesta, ruta) {
       agent: false,
     },
     (aguasArriba) => {
-      respuesta.writeHead(aguasArriba.statusCode ?? 502, aguasArriba.headers);
-      aguasArriba.pipe(respuesta);
+      /*
+       * Se lee el cuerpo entero y se manda con su longitud, en vez de reenviar las cabeceras del
+       * backend tal cual.
+       *
+       * Reenviarlas era el bug: el backend contesta `Transfer-Encoding: chunked` en un salto y
+       * `Connection: close` en otro, y al pasarlas sin tocarlas el navegador recibia una respuesta que
+       * no sabe cerrar: la peticion se quedaba pendiente para siempre, aunque el puente ya hubiera
+       * contestado 200. Con Content-Length, el navegador sabe exactamente donde acaba.
+       */
+      const trozos = [];
+      aguasArriba.on('data', (trozo) => trozos.push(trozo));
+      aguasArriba.on('end', () => {
+        const cuerpo = Buffer.concat(trozos);
+        /*
+         * Lista blanca: solo se reenvia lo que describe el cuerpo.
+         *
+         * Reenviar las cabeceras del backend era el bug. El gateway contesta con
+         * `Connection: close`/`keep-alive` y `Transfer-Encoding: chunked` de SU conexion; si eso
+         * llega al navegador, este cierra o espera un socket que no le corresponde y la peticion se
+         * queda pendiente para siempre aunque el puente ya haya contestado 200. Es exactamente lo que
+         * pasaba.
+         */
+        const cabeceras = {};
+        for (const nombre of ['content-type', 'cache-control', 'etag', 'last-modified']) {
+          if (aguasArriba.headers[nombre]) {
+            cabeceras[nombre] = aguasArriba.headers[nombre];
+          }
+        }
+        cabeceras['content-length'] = String(cuerpo.length);
+        console.log(`[bridge] <- ${aguasArriba.statusCode} ${peticion.url} (${cuerpo.length} B)`);
+        respuesta.writeHead(aguasArriba.statusCode ?? 502, cabeceras);
+        respuesta.end(cuerpo);
+      });
     },
   );
   salida.on('error', (error) => {
-    console.error(`[bridge] ${peticion.url} -> ${ruta.destino.port}: ${error.message}`);
+    console.error(`[bridge] ${peticion.url} -> ${ruta.puerto}: ${error.message}`);
     respuesta.writeHead(502, { 'content-type': 'application/json' });
     respuesta.end(JSON.stringify({ error: 'el servicio no responde', detalle: String(error.message) }));
   });
@@ -122,8 +166,9 @@ servidor.on('upgrade', (peticion, socket, cabeza) => {
     socket.destroy();
     return;
   }
-  const destino = ruta.quitar ? peticion.url.replace(ruta.quitar, '') : peticion.url;
-  const aguasArriba = connect(ruta.destino.port, ruta.destino.host, () => {
+  const resto = (peticion.url ?? '/').slice(ruta.prefijo.length);
+  const destino = `${ruta.reenviar}${resto}`;
+  const aguasArriba = connect(ruta.puerto, 'localhost', () => {
     const lineas = [`${peticion.method} ${destino} HTTP/1.1`];
     for (const [clave, valor] of Object.entries(peticion.headers)) {
       lineas.push(`${clave}: ${Array.isArray(valor) ? valor.join(', ') : valor}`);
@@ -135,7 +180,7 @@ servidor.on('upgrade', (peticion, socket, cabeza) => {
     socket.pipe(aguasArriba).pipe(socket);
   });
   aguasArriba.on('error', (error) => {
-    console.error(`[bridge] ws ${peticion.url} -> ${ruta.destino.port}: ${error.message}`);
+    console.error(`[bridge] ws ${peticion.url} -> ${ruta.puerto}: ${error.message}`);
     socket.destroy();
   });
   socket.on('error', () => aguasArriba.destroy());
@@ -145,6 +190,6 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
   console.log(`[bridge] dashboard compilado en http://localhost:${PUERTO}`);
   console.log(`[bridge] sirviendo ${RAIZ}`);
   for (const ruta of RUTAS) {
-    console.log(`[bridge]   ${ruta.prefijo}${ruta.ws ? ' (ws)' : ''} -> ${ruta.destino.host}:${ruta.destino.port}`);
+    console.log(`[bridge]   ${ruta.prefijo}${ruta.ws ? ' (ws)' : ''} -> localhost:${ruta.puerto}${ruta.reenviar}`);
   }
 });

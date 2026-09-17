@@ -38,12 +38,21 @@ export async function getJson(url: string, timeoutMs: number = REQUEST_TIMEOUT_M
   const control = new AbortController();
   const corte = setTimeout(() => control.abort(), timeoutMs);
   try {
-    const respuesta = await fetch(url, {
+    console.info('[aggora] fetch lanzado', url);
+    /*
+     * URL unica por peticion.
+     *
+     * Los mismos endpoints se piden cada pocos segundos, y con la misma URL el navegador puede
+     * reutilizar una respuesta o una peticion que ya esta en curso. Anadir un sello de tiempo quita
+     * esa ambiguedad y hace que cada medicion sea de esta peticion y no de la anterior.
+     */
+    const separador = url.includes('?') ? '&' : '?';
+    const respuesta = await fetch(`${url}${separador}_t=${Date.now()}`, {
       signal: control.signal,
-      // Sin cache: estos paneles son el estado de ahora, no un documento.
-      cache: 'no-store',
     });
+    console.info('[aggora] fetch respondio', url, respuesta.status);
     const texto = await respuesta.text();
+    console.info('[aggora] fetch cuerpo leido', url, texto.length, 'B');
     if (!respuesta.ok) {
       throw new HttpFetchError(
         `HTTP ${respuesta.status} en ${url}`,
@@ -54,6 +63,7 @@ export async function getJson(url: string, timeoutMs: number = REQUEST_TIMEOUT_M
     }
     return parsearCuerpo(texto);
   } catch (error) {
+    console.warn('[aggora] fetch fallo', url, String(error));
     if (error instanceof HttpFetchError) {
       throw error;
     }

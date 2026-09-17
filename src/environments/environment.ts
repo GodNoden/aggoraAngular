@@ -48,7 +48,7 @@ export const environment: Environment = {
     // La consulta interactiva de Quarkus es el servicio del 8185, no su gateway: va por URL
     // completa (en produccion, la del reverse proxy que la publique).
     analytics: 'http://localhost:8185',
-    health: '/q',
+    health: '',
     healthPath: '/q/health',
     wsPath: '/q/ws',
   },

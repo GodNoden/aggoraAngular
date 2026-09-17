@@ -168,9 +168,6 @@
           probar('proxy /api (mismo origen)', '/api/metrics?panel=pulso', 4000),
           probar('proxy /q/api (mismo origen)', '/q/api/metrics?panel=pulso', 4000),
           probar('proxy /analytics', '/analytics?symbol=EUR%2FUSD&minutes=3', 4000),
-          probar('DIRECTO Spring :8089', 'http://localhost:8089/api/metrics?panel=pulso', 4000),
-          probar('DIRECTO Quarkus :8189', 'http://localhost:8189/api/metrics?panel=pulso', 4000),
-          probar('DIRECTO analytics :8085', 'http://localhost:8085/analytics?symbol=EUR%2FUSD&minutes=3', 4000),
         ]);
         // El WebSocket se mide aparte: no es fetch y falla de otra manera.
         try {
