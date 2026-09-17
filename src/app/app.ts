@@ -33,6 +33,7 @@ import { LessonsPanel } from './ui/lessons-panel';
 import { Verify } from './verify';
 import { MetricRow, formatAge, formatInteger } from './ui/format';
 import { lastValue } from './core/contract.parser';
+import { wsUrl } from './core/urls';
 
 /** Los paneles de metricas con su forma de pintarse. */
 type PanelView = 'pulse' | 'lag' | 'series' | 'health' | 'transactions';
@@ -208,6 +209,34 @@ export class App implements OnDestroy {
   etiqueta(stack: Stack): string {
     return environment[stack].label;
   }
+
+  /** A donde apunta el socket de un stack: se ve en la pantalla sin abrir la consola. */
+  urlSocket(stack: Stack): string {
+    return wsUrl(environment[stack]);
+  }
+
+  /**
+   * Aviso de "no hay a quien preguntar".
+   *
+   * Sin esto la pagina se queda en `loading` para siempre cuando el gateway no responde, y parece
+   * que la app esta rota cuando lo que pasa es que el backend esta caido. Un panel aislado puede
+   * fallar sin ruido, pero si TODOS fallan a la vez, se dice en la cabecera.
+   */
+  readonly sinBackend = computed(() => {
+    const paneles = Object.values(this.metrics.panels());
+    const conDatos = paneles.filter((estado) => estado.status === 'ok').length;
+    const conError = paneles.filter((estado) => estado.status === 'error').length;
+    return conDatos === 0 && conError > 0;
+  });
+
+  /** Mensaje del aviso, con la URL que fallo. */
+  readonly avisoBackend = computed(() => {
+    const errores = Object.values(this.metrics.panels()).filter((estado) => estado.status === 'error');
+    const primero = errores[0];
+    const cola = primero?.note ? ` ${primero.note}` : '';
+    const otros = errores.length > 1 ? ` (+${errores.length - 1} more panels with the same problem)` : '';
+    return `No panel is answering.${cola}${otros}`;
+  });
 
   /** Estado del WebSocket de un stack, en una frase. */
   estadoSocket(stack: Stack): string {

@@ -226,6 +226,29 @@ select:disabled {
   padding: 6px 9px;
 }
 
+/* La URL del socket a la vista: sin abrir la consola se sabe a donde esta llamando la pagina. */
+.sock.url {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-faint);
+}
+
+/* Aviso de gateway caido: mas fuerte que el de un panel suelto, porque no hay nada que ver. */
+.banner.down {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  border-left-color: var(--bad);
+}
+
+.banner.down span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 /* ------------------------------------------------------------------ columnas y rejilla */
 
 .column {

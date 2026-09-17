@@ -67,13 +67,27 @@
 
   <div class="status">
     @for (stack of visibles(); track stack) {
-      <span class="sock" [attr.data-state]="live.live()[stack].state">
+      <span class="sock" [attr.data-state]="live.live()[stack].state" [title]="urlSocket(stack)">
         <span class="dot"></span>
         {{ etiqueta(stack) }}: {{ estadoSocket(stack) }}
       </span>
     }
     <span class="sock muted">{{ totalMensajes() }} messages parsed</span>
+    @for (stack of visibles(); track stack) {
+      <span class="sock url">{{ urlSocket(stack) }}</span>
+    }
   </div>
+
+  @if (sinBackend()) {
+    <p class="banner down">
+      <strong>{{ avisoBackend() }}</strong>
+      <span>
+        The page is read-only: it cannot show data it does not receive and it will not invent any.
+        Check that the gateway is up; the panels are polled every {{ intervalSeconds }} s, so this
+        clears by itself as soon as it answers.
+      </span>
+    </p>
+  }
 
   @if (metrics.hasErrors()) {
     <p class="banner">
