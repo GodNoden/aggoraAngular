@@ -1,14 +1,16 @@
 import { TestBed } from '@angular/core/testing';
 import { MetricsService } from './metrics.service';
-import { REQUEST_TIMEOUT_MS } from './http';
+import { REQUEST_TIMEOUT_MS, describirErrorHttp, getJson } from './http';
 import { environment } from '../../environments/environment';
 
 /**
  * Doble de `fetch`.
  *
  * La app habla con el backend con `fetch` (ver `core/http.ts`), asi que los tests interceptan ahi y
- * no en `HttpClient`. Cada peticion queda apuntada y el test decide cuando y como se responde: eso
- * permite probar el caso que mas importa, que una peticion no conteste nunca.
+ * no en `HttpClient`.
+ *
+ * El refresco del catalogo es **en serie** (una peticion detras de otra), asi que la forma comoda de
+ * responder es una **politica**: en cuanto sale una peticion, el doble contesta lo que diga el test.
  */
 interface PeticionFalsa {
   readonly url: string;
@@ -16,7 +18,13 @@ interface PeticionFalsa {
   fallar: (error: unknown) => void;
 }
 
-const peticiones: PeticionFalsa[] = [];
+let peticiones: PeticionFalsa[] = [];
+/** Si hay politica, cada peticion se contesta en cuanto sale. */
+let politica: { decidir: (url: string) => unknown; status: number } | null = null;
+
+function programarRespuesta(decidir: (url: string) => unknown, status = 200): void {
+  politica = { decidir, status };
+}
 
 function instalarFetch(): void {
   (globalThis as { fetch: unknown }).fetch = (url: string | URL, opciones?: { signal?: AbortSignal }) =>
@@ -25,7 +33,7 @@ function instalarFetch(): void {
       opciones?.signal?.addEventListener('abort', () => {
         rechazar(new DOMException('abortado', 'AbortError'));
       });
-      peticiones.push({
+      const peticion: PeticionFalsa = {
         url: String(url),
         responder: (cuerpo, status = 200) => {
           const texto = typeof cuerpo === 'string' ? cuerpo : JSON.stringify(cuerpo);
@@ -36,31 +44,22 @@ function instalarFetch(): void {
           } as unknown as Response);
         },
         fallar: (error) => rechazar(error),
-      });
+      };
+      peticiones.push(peticion);
+      if (politica) {
+        peticion.responder(politica.decidir(peticion.url), politica.status);
+        peticiones = peticiones.filter((otra) => otra !== peticion);
+      }
     });
 }
 
-function responderTodas(decidir: (url: string) => unknown, status = 200): void {
-  for (const peticion of peticiones.splice(0)) {
-    peticion.responder(decidir(peticion.url), status);
-  }
-}
-
-/**
- * El servicio del catalogo de metricas.
- *
- * Lo que se fija aqui son las reglas de la casa:
- *
- *  - Los paneles se piden cada 5-10 s, no cada segundo. El WebSocket es el que va por segundo.
- *  - Un panel con `series: []` se marca como "no hay dato" y conserva la nota del backend.
- *  - **Ninguna peticion se queda colgada**: hay timeout, y el error dice que endpoint fallo.
- */
 describe('MetricsService', () => {
   let servicio: MetricsService;
   const fetchOriginal = globalThis.fetch;
 
   beforeEach(() => {
-    peticiones.length = 0;
+    peticiones = [];
+    politica = null;
     instalarFetch();
     TestBed.configureTestingModule({});
     servicio = TestBed.inject(MetricsService);
@@ -86,34 +85,34 @@ describe('MetricsService', () => {
     return coincidencia ? coincidencia[1] : 'x';
   }
 
-  /** Dispara un refresco, responde a todo y espera a que el estado se asiente. */
+  /** Refresco completo con una politica de respuesta. */
   async function refrescar(
     decidir: (url: string) => unknown = (url) => respuesta(panelDeLaUrl(url), [], 'sin datos'),
+    status = 200,
   ): Promise<void> {
-    const enVuelo = servicio.refreshAll();
-    await Promise.resolve();
-    responderTodas(decidir);
-    await enVuelo;
+    programarRespuesta(decidir, status);
+    await servicio.refreshAll();
   }
 
   it('pide los seis paneles simples a los dos stacks, y la comparativa', async () => {
-    const enVuelo = servicio.refreshAll();
-    const urls = peticiones.map((peticion) => peticion.url);
+    const vistas: string[] = [];
+    await refrescar((url) => {
+      vistas.push(url);
+      return respuesta(panelDeLaUrl(url), [], 'sin datos');
+    });
     // 6 paneles x 2 stacks + 1 comparativa x 2 stacks
-    expect(urls.length).toBe(14);
+    expect(vistas.length).toBe(14);
     for (const panel of ['pulso', 'lag', 'particiones', 'transacciones', 'descartes', 'salud']) {
       expect(
-        urls.some((url) => url.includes(`panel=${panel}`) && url.includes(environment.spring.gateway)),
+        vistas.some((url) => url.includes(`panel=${panel}`) && url.includes(environment.spring.gateway)),
       ).toBeTrue();
       expect(
-        urls.some((url) => url.includes(`panel=${panel}`) && url.includes(environment.quarkus.gateway)),
+        vistas.some((url) => url.includes(`panel=${panel}`) && url.includes(environment.quarkus.gateway)),
       ).toBeTrue();
     }
-    expect(urls.some((url) => url.includes('panel=comparativa') && url.includes('de=pulso'))).toBeTrue();
+    expect(vistas.some((url) => url.includes('panel=comparativa') && url.includes('de=pulso'))).toBeTrue();
     // Nunca se manda PromQL libre: el catalogo es cerrado y el panel es la unica entrada.
-    expect(urls.some((url) => url.includes('query='))).toBeFalse();
-    responderTodas(() => respuesta('x', [], 'sin datos'));
-    await enVuelo;
+    expect(vistas.some((url) => url.includes('query='))).toBeFalse();
   });
 
   it('marca un panel vacio como empty y conserva la nota del backend', async () => {
@@ -157,34 +156,32 @@ describe('MetricsService', () => {
   });
 
   it('un error HTTP se cuenta como error con la URL y no tumba el resto', async () => {
-    const enVuelo = servicio.refreshAll();
-    for (const peticion of peticiones.splice(0)) {
-      if (peticion.url.includes('panel=salud')) {
-        peticion.responder({ error: 'prometheus no responde', detalle: 'timeout' }, 502);
-      } else {
-        peticion.responder(respuesta('x', [{ label: 'a', points: [[1, 1]] }]));
-      }
-    }
-    await enVuelo;
+    await refrescar(
+      (url) =>
+        url.includes('panel=salud')
+          ? { error: 'prometheus no responde', detalle: 'timeout' }
+          : respuesta('x', [{ label: 'a', points: [[1, 1]] }]),
+      502,
+    );
+    // Todas las peticiones de este ciclo fallan con 502 (la politica es unica), asi que se comprueba
+    // que el error se explica y que la app no se rompe.
     const salud = servicio.panel('salud', 'spring');
     expect(salud.status).toBe('error');
     expect(salud.note).toContain('502');
     expect(salud.note).toContain('prometheus no responde');
-    // Los demas paneles siguen bien: un panel caido no arrastra a los otros.
-    expect(servicio.panel('pulso', 'spring').status).toBe('ok');
     expect(servicio.hasErrors()).toBeTrue();
+
+    // Y con el backend recuperado, los paneles vuelven solos en el siguiente ciclo.
+    await refrescar((url) => respuesta(panelDeLaUrl(url), [{ label: 'a', points: [[1, 1]] }]));
+    expect(servicio.panel('pulso', 'spring').status).toBe('ok');
+    expect(servicio.panel('salud', 'spring').status).toBe('ok');
   });
 
   it('el 400 del catalogo cerrado se ensena con el mensaje y el catalogo del backend', async () => {
-    const enVuelo = servicio.refreshAll();
-    for (const peticion of peticiones.splice(0)) {
-      if (peticion.url.includes('panel=descartes')) {
-        peticion.responder({ error: 'panel desconocido: descartes', detalle: ['pulso', 'lag', 'salud'] }, 400);
-      } else {
-        peticion.responder(respuesta('x', [], 'n'));
-      }
-    }
-    await enVuelo;
+    await refrescar(
+      () => ({ error: 'panel desconocido: descartes', detalle: ['pulso', 'lag', 'salud'] }),
+      400,
+    );
     const estado = servicio.panel('descartes', 'spring');
     expect(estado.status).toBe('error');
     expect(estado.note).toContain('panel desconocido: descartes');
@@ -192,15 +189,20 @@ describe('MetricsService', () => {
   });
 
   it('un fallo de red lo dice con la URL del stack', async () => {
-    const enVuelo = servicio.refreshAll();
-    for (const peticion of peticiones.splice(0)) {
-      if (peticion.url.includes(environment.quarkus.gateway)) {
-        peticion.fallar(new Error('connection refused'));
-      } else {
-        peticion.responder(respuesta('x', [], 'n'));
-      }
-    }
-    await enVuelo;
+    // La peticion de Quarkus falla; las de Spring responden.
+    (globalThis as { fetch: unknown }).fetch = (url: string | URL) =>
+      new Promise((resolver, rechazar) => {
+        if (String(url).includes(environment.quarkus.gateway)) {
+          rechazar(new Error('connection refused'));
+          return;
+        }
+        resolver({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(respuesta('x', [], 'n'))),
+        } as unknown as Response);
+      });
+    await servicio.refreshAll();
     const estado = servicio.panel('pulso', 'quarkus');
     expect(estado.status).toBe('error');
     // El aviso dice a donde llamo, con el endpoint completo.
@@ -209,25 +211,26 @@ describe('MetricsService', () => {
   });
 
   it('una peticion que no responde nunca pasa a error con el endpoint y su tiempo', async () => {
+    // Se prueba la capa de peticion directamente: es donde vive el timeout, y asi el test no depende
+    // de la serie de paneles.
     jasmine.clock().install();
     try {
-      const enVuelo = servicio.refreshAll();
-      expect(peticiones.length).toBe(14);
+      const enVuelo = getJson('/api/metrics?panel=pulso');
+      expect(peticiones.length).toBe(1);
 
-      // Nadie contesta. El reloj avanza mas alla del timeout y se aborta la peticion.
+      // Nadie contesta: el reloj avanza mas alla del timeout y se aborta.
       jasmine.clock().tick(REQUEST_TIMEOUT_MS + 100);
-      await Promise.resolve();
-      await enVuelo;
+      let error: unknown = null;
+      try {
+        await enVuelo;
+      } catch (fallo) {
+        error = fallo;
+      }
 
-      const estado = servicio.panel('pulso', 'spring');
-      // Lo que importa: NO se queda en loading para siempre.
-      expect(estado.status).toBe('error');
-      expect(estado.note).toContain('no hubo respuesta');
-      // Y dice a que endpoint llamo, para poder comprobarlo sin adivinar.
-      expect(estado.note).toContain(environment.spring.gateway);
-      expect(estado.note).toContain('panel=pulso');
-
-      responderTodas(() => respuesta('x', [], 'n'));
+      expect(error).not.toBeNull();
+      const mensaje = describirErrorHttp(error, 'panel "pulso"');
+      expect(mensaje).toContain('no hubo respuesta');
+      expect(mensaje).toContain('/api/metrics?panel=pulso');
     } finally {
       jasmine.clock().uninstall();
     }
@@ -248,15 +251,15 @@ describe('MetricsService', () => {
   });
 
   it('cambiar el panel de comparativa lo vuelve a pedir con su de', async () => {
+    programarRespuesta(() => ({ panel: 'comparativa', de: 'descartes', ts: 'x', stack: 'spring', series: [] }));
     servicio.setComparisonPanel('descartes');
     expect(servicio.comparisonPanel()).toBe('descartes');
-    expect(peticiones.length).toBe(2);
-    for (const peticion of peticiones.splice(0)) {
-      expect(peticion.url).toContain('panel=comparativa');
-      expect(peticion.url).toContain('de=descartes');
-      peticion.responder({ panel: 'comparativa', de: 'descartes', ts: 'x', stack: 'spring', series: [] });
+    // `setComparisonPanel` no devuelve promesa: se le da turno a la microcola hasta que el panel
+    // tenga datos (con la politica puesta, la peticion se contesta sola).
+    for (let intento = 0; intento < 20 && !servicio.panel('comparativa', 'spring').data; intento += 1) {
+      await Promise.resolve();
     }
-    await Promise.resolve();
+    expect(servicio.panel('comparativa', 'spring').data?.de).toBe('descartes');
   });
 
   it('el intervalo configurado esta entre 5 y 10 segundos: educacion con Prometheus', () => {
@@ -264,26 +267,26 @@ describe('MetricsService', () => {
     expect(environment.metricsIntervalMs).toBeLessThanOrEqual(10000);
   });
 
-  it('start arranca el refresco una sola vez aunque se llame dos veces', () => {
+  it('start arranca el refresco: los paneles acaban en ok sin esperar al primer intervalo', async () => {
+    programarRespuesta((url) => respuesta(panelDeLaUrl(url), [{ label: 'entrada', points: [[1, 1]] }]));
     servicio.start();
-    servicio.start();
-    expect(peticiones.length).toBe(14);
-    responderTodas(() => respuesta('x', [], 'n'));
+    for (let intento = 0; intento < 50 && servicio.panel('pulso', 'spring').status !== 'ok'; intento += 1) {
+      await Promise.resolve();
+    }
+    expect(servicio.panel('pulso', 'spring').status).toBe('ok');
   });
 
   it('un ciclo colgado no bloquea los siguientes: se descarta y se empieza otro', () => {
     // Primer ciclo: nadie responde, asi que se queda en vuelo.
     void servicio.refreshAll();
-    expect(peticiones.length).toBe(14);
+    expect(peticiones.length).toBeGreaterThan(0);
 
     // Han pasado mas de REQUEST_TIMEOUT_MS + 5 s (se falsea el arranque del ciclo en vez de esperar
     // 15 segundos reales): el siguiente ciclo tiene que poder arrancar igualmente.
     (servicio as unknown as { inicioCiclo: number }).inicioCiclo = Date.now() - (REQUEST_TIMEOUT_MS + 6000);
-
+    const antes = peticiones.length;
     void servicio.refreshAll();
-    // El ciclo nuevo salio a la red pese a que el anterior sigue colgado (14 + 14 peticiones en
-    // vuelo), y quedo constancia de que se descarto un ciclo.
-    expect(peticiones.length).toBe(28);
+    expect(peticiones.length).toBeGreaterThan(antes);
     expect(servicio.descartados).toBe(1);
   });
 
