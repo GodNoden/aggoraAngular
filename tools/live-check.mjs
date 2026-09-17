@@ -93,6 +93,24 @@ try {
     writeFileSync(ARG_VOLCADO.split('=')[1], resultado.result.value);
   }
 
+  // El otro stack: se pulsa Quarkus y tiene que traer datos, incluida **su** analitica.
+  console.log('\n--- cambiando a Quarkus ---');
+  await navegador.cdp.send('Runtime.evaluate', {
+    expression: `[...document.querySelectorAll('.segmentado button')].find((b) => b.textContent.trim() === 'Quarkus').click()`,
+  });
+  await dormir(2000);
+  await esperarEstable(navegador.cdp, { maxMs: 40000 });
+  const quarkus = await leer(navegador.cdp);
+  comprobar('cambiando a Quarkus la pagina trae datos', quarkus.conDatos >= 5, `${quarkus.conDatos} con datos`);
+  comprobar('la analitica de Quarkus responde', quarkus.ventanas > 0, `${quarkus.ventanas} ventanas`);
+  comprobar('ninguna tarjeta da error en Quarkus', quarkus.errores === 0, `${quarkus.errores} con error`);
+
+  // Volver a Spring para que la recarga se mida en el mismo sitio donde empezo.
+  await navegador.cdp.send('Runtime.evaluate', {
+    expression: `[...document.querySelectorAll('.segmentado button')].find((b) => b.textContent.trim() === 'Spring Boot').click()`,
+  });
+  await dormir(1500);
+
   // La recarga: el sintoma historico. Tiene que comportarse igual que una sesion fresca.
   console.log('\n--- recargando la misma pestana ---');
   await navegador.cdp.send('Page.reload', { ignoreCache: false });

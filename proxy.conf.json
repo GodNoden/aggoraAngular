@@ -1,4 +1,11 @@
 {
+  "/q/analytics": {
+    "target": "http://localhost:8185",
+    "secure": false,
+    "changeOrigin": true,
+    "pathRewrite": { "^/q/analytics": "/analytics" },
+    "logLevel": "warn"
+  },
   "/q": {
     "target": "http://localhost:8189",
     "secure": false,

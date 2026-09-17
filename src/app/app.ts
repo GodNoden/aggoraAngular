@@ -388,9 +388,21 @@ export class App implements OnDestroy {
     void this.catalog.refresh();
   }
 
-  protected consultar(): void {
-    void this.analytics.query('spring', this.simbolo(), this.minutos());
+  /** El stack al que se le pregunta el state store: el que se esta mirando (o Spring, en modo both). */
+  private stackConsultado(): Stack {
+    const modo = this.view();
+    return modo === 'quarkus' ? 'quarkus' : 'spring';
   }
+
+  protected consultar(): void {
+    void this.analytics.query(this.stackConsultado(), this.simbolo(), this.minutos());
+  }
+
+  /** La etiqueta del stack al que se le pregunto, para decirlo en pantalla. */
+  protected readonly stackAnalitica = computed(() => STACK_LABEL[this.stackConsultado()]);
+
+  /** Si la consulta mostrada es del stack que se esta mirando ahora mismo. */
+  protected readonly analiticaAlDia = computed(() => this.analitica().stack === this.view());
 
   protected readonly analitica = this.analytics.state;
 

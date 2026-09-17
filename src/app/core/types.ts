@@ -34,7 +34,8 @@ export interface Paths {
 
 export const PATHS: Readonly<Record<Stack, Paths>> = {
   spring: { gateway: '/api', ws: '/ws', analytics: '/analytics' },
-  quarkus: { gateway: '/q/api', ws: '/q/ws', analytics: '/analytics' },
+  // La analitica de Quarkus vive en su servicio del 8185, no en su gateway: de ahi su propio prefijo.
+  quarkus: { gateway: '/q/api', ws: '/q/ws', analytics: '/q/analytics' },
 };
 
 /* ------------------------------------------------------------------ por WebSocket */

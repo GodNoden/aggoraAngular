@@ -27,8 +27,8 @@ De arriba abajo:
    valor de cada simbolo) y las alertas y posiciones, que no esperan al segundo.
 3. **El catalogo**: seis paneles, cada uno una pregunta cerrada a Prometheus. Los paneles con
    leccion asociada traen el comando exacto que la provoca y que hay que ver.
-4. **El state store**: la unica consulta que pide el usuario a proposito (`/analytics`), con las
-   ventanas que ha calculado el motor, su VWAP y su volatilidad.
+4. **El state store**: la unica consulta que pide el usuario a proposito (`/analytics` en Spring,
+   `/q/analytics` en Quarkus), con las ventanas que ha calculado el motor, su VWAP y su volatilidad.
 
 Los paneles del catalogo, en orden:
 
@@ -72,14 +72,18 @@ npm run serve:built        # sirve el build y hace de proxy en http://localhost:
 origen**: la app habla con su propio host y el puente decide a que servicio va cada prefijo.
 
 ```
-/api        -> Spring   8089        /ws    -> WebSocket de Spring 8089
-/q/api      -> Quarkus  8189        /q/ws  -> WebSocket de Quarkus 8189
-/analytics  -> Spring   8085        (el state store)
-/actuator   -> simulador 8080
+/api          -> Spring   8089      /ws    -> WebSocket de Spring 8089
+/q/api        -> Quarkus  8189      /q/ws  -> WebSocket de Quarkus 8189
+/analytics    -> Spring   8085      /q/analytics -> Quarkus 8185
+/actuator     -> simulador 8080
 ```
 
-En desarrollo tambien vale `npm start` (Angular dev server con `proxy.conf.json`), pero el camino
-probado es el build compilado: es lo que se publica.
+`/q/analytics` tiene ruta propia porque el gateway de Quarkus (8189) **no** publica la analitica: eso
+vive en su servicio del 8185. La pagina pregunta al stack que estas mirando, y en modo "los dos" lo
+dice en pantalla en vez de dejar creer que pregunta a los dos.
+
+En desarrollo tambien vale `npm start` (Angular dev server con `proxy.conf.json`): **probado tambien**
+con las mismas 34 comprobaciones en vivo, incluida la recarga.
 
 ### Parametros de la URL
 
@@ -97,10 +101,12 @@ npm run verify:live   # la app en un navegador de verdad, contra el backend vivo
 npm run diag:browser  # consola, red y recarga de un navegador real, desde WSL
 ```
 
-`verify:live` hace **31 comprobaciones** sobre la pagina pintada — que los paneles traigan datos,
+`verify:live` hace **34 comprobaciones** sobre la pagina pintada — que los paneles traigan datos,
 que el panel vacio se explique, que el WebSocket entregue, que las graficas se dibujen, que cada
-panel traiga su explicacion — y las repite **despues de recargar**, porque recargar fue el sintoma
-que se llevo por delante una version entera de esta pagina.
+panel traiga su explicacion, que el cambio a Quarkus funcione con **su** analitica — y las repite
+**despues de recargar**, porque recargar fue el sintoma que se llevo por delante una version entera
+de esta pagina. Acepta una URL, asi que vale igual contra el build (`npm run serve:built`) o contra
+el dev server (`npm start`).
 
 `diag:browser` es la herramienta de investigacion: sirve el build, lanza el navegador de Windows,
 pone su puerto de depuracion al alcance de WSL (un rele TCP, porque WSL2 solo reenvia `localhost` en

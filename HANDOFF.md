@@ -53,14 +53,18 @@ explicacion**; si el backend cambia de comportamiento, ese es el fichero que hay
 - `npm test`: **21 specs**. Cubren el parseo defensivo (un frame roto no tumba la pagina), el
   catalogo (vacio **con nota** es informacion; un 502 es averia y dice donde llamo), la ventana de
   las graficas (no repite valores) y el arranque del shell con el `appConfig` real.
-- `npm run verify:live`: **31/31 en verde**, y es lo importante. Sobre la pagina pintada por un
-  navegador de verdad contra el backend vivo, en sesion fresca **y despues de recargar**:
+- `npm run verify:live`: **34/34 en verde**, y es lo importante. Sobre la pagina pintada por un
+  navegador de verdad contra el backend vivo, en sesion fresca, **cambiando a Quarkus** y **despues
+  de recargar**. Corre igual contra el build compilado (`serve:built`) y contra el dev server
+  (`npm start`, puerto 4303): los dos caminos estan probados.
   - 9 tarjetas, 5 etapas del diagrama, 16 estados `ok` (una por panel y stack), 0 pidiendo, 0 errores;
   - 38 trazos de grafica, 12 simbolos en la foto, alertas y posiciones llegando;
   - 2 ventanas del state store;
   - 9 bloques de explicacion y 3 comandos de leccion en pantalla.
 - Probado tambien a mano el selector: Spring (9 tarjetas), **los dos en paralelo** (19 tarjetas, 4
-  titulos de columna, el selector de comparativa) y Quarkus (9 tarjetas, 0 errores).
+  titulos de columna, el selector de comparativa) y Quarkus (9 tarjetas, 0 errores, con su propia
+  analitica en `/q/analytics` -> 8185; el gateway de Quarkus no publica esa ruta y por eso tiene
+  prefijo propio en `tools/serve-verify.mjs` y en `proxy.conf.json`).
 
 Un fallo real que salio en esta reescritura, y que conviene recordar: la primera version construia
 `/analytics/analytics` (404). Es **el mismo error que ya habia cometido la version anterior**, asi
@@ -81,19 +85,14 @@ que ahora hay dos specs que fijan las URLs exactas.
 
 ## Lo que queda abierto (no son fallos, son decisiones)
 
-1. **La consulta al state store solo pregunta a Spring.** Quarkus tiene su propio `/analytics` en el
-   8185, pero en `core/types.ts` los dos stacks apuntan al mismo camino del proxy. Si se quiere
-   comparar, hay que publicar el de Quarkus y darle su prefijo.
-2. **`salud` solo publica el motor de Spring** (`spring/analytics-streams`); Quarkus no tiene
+1. **`salud` solo publica el motor de Spring** (`spring/analytics-streams`); Quarkus no tiene
    contrapartida en esta Prometheus. La pagina no lo rellena: ese grupo simplemente no aparece. Esta
    anotado en el texto del panel.
-3. **`comparativa` etiqueta las series como `spring` y `quarkus`**, no como `spring/...` (el README
+2. **`comparativa` etiqueta las series como `spring` y `quarkus`**, no como `spring/...` (el README
    del backend dice lo segundo). La pagina pinta lo que llega.
-4. **`salud` trae ~90 series**, 82 de ellas `under-replicated/prueba.*` en cero. Se pliegan en un
+3. **`salud` trae ~90 series**, 82 de ellas `under-replicated/prueba.*` en cero. Se pliegan en un
    contador para que no tapen la señal.
-5. **No hay autenticacion.** CORS no es autenticacion: `curl` lee todos los endpoints.
-6. **`ng serve` no se ha vuelto a verificar** tras la reescritura. El camino probado es el build
-   compilado con `serve:built`.
+4. **No hay autenticacion.** CORS no es autenticacion: `curl` lee todos los endpoints.
 
 ## Trampas que ya costaron tiempo aqui
 

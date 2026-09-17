@@ -121,6 +121,12 @@ describe('las URLs del backend', () => {
     expect(analyticsUrl('spring', 'EUR/USD', 3)).toBe('/analytics?symbol=EUR%2FUSD&minutes=3');
   });
 
+  it('cada stack tiene su propio camino de analitica', () => {
+    // La de Quarkus no esta en su gateway (8189) sino en su servicio de analitica (8185), y por eso
+    // tiene prefijo propio en el proxy.
+    expect(analyticsUrl('quarkus', 'EUR/USD', 3)).toBe('/q/analytics?symbol=EUR%2FUSD&minutes=3');
+  });
+
   it('pide el catalogo una vez por panel', () => {
     expect(catalogUrl('spring', 'pulso')).toBe('/api/metrics?panel=pulso');
     expect(catalogUrl('quarkus', 'pulso')).toBe('/q/api/metrics?panel=pulso');

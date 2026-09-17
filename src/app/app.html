@@ -412,14 +412,20 @@
     <p>
       Todo lo de arriba lo publica Prometheus. Esto no: aqui se le pregunta al <strong>state store</strong>
       del motor por las ventanas que ha calculado el, con su VWAP y su volatilidad. Es la unica parte
-      de la pagina que pide el usuario a proposito.
+      de la pagina que pide el usuario a proposito, y cada implementacion tiene el suyo.
     </p>
+    @if (ambos()) {
+      <p class="pista">
+        Estas mirando los dos stacks a la vez, asi que la consulta va al de <strong>{{ stackAnalitica() }}</strong>.
+        Cambia a Quarkus para preguntarle al otro: no se pueden preguntar los dos en la misma tabla.
+      </p>
+    }
   </header>
 
   <div class="rejilla">
     <ag-card
       title="Consulta al state store"
-      ask="GET /analytics?symbol=&minutes="
+      [ask]="'GET ' + (stackAnalitica() === 'Quarkus' ? '/q/analytics' : '/analytics') + '?symbol=&minutes='"
       [estado]="analitica().status === 'ok' ? 'ok' : analitica().status === 'error' ? 'error' : analitica().status === 'vacio' ? 'vacio' : 'pidiendo'"
       [ms]="analitica().ms"
       [note]="analitica().note"

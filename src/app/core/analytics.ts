@@ -20,6 +20,8 @@ export class Analytics {
     readonly symbol: string;
     readonly minutes: number;
     readonly ms: number | null;
+    /** A que stack se le pregunto, para poder decir en pantalla si la respuesta es de este. */
+    readonly stack: Stack | null;
   }>({
     status: 'inicial',
     windows: [],
@@ -27,6 +29,7 @@ export class Analytics {
     symbol: 'EUR/USD',
     minutes: 3,
     ms: null,
+    stack: null,
   });
 
   readonly state = this.estado.asReadonly();
@@ -40,6 +43,7 @@ export class Analytics {
       symbol: limpio,
       minutes,
       note: null,
+      stack,
     }));
     const url = analyticsUrl(stack, limpio, minutes);
     const inicio = Date.now();

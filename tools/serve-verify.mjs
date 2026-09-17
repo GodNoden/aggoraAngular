@@ -7,9 +7,13 @@
  * que hay que montar el dia del despliegue: la app y el gateway detras del mismo origen.
  *
  * Reparte igual que `proxy.conf.json`:
- *   /api        -> Spring 8089        /ws   -> WebSocket de Spring 8089
- *   /q/api...   -> Quarkus 8189       /q/ws -> WebSocket de Quarkus 8189
- *   /analytics  -> Spring 8085        /actuator -> simulador 8080
+ *   /api          -> Spring 8089       /ws    -> WebSocket de Spring 8089
+ *   /q/api...     -> Quarkus 8189      /q/ws  -> WebSocket de Quarkus 8189
+ *   /analytics    -> Spring 8085       /q/analytics -> Quarkus 8185
+ *   /actuator     -> simulador 8080
+ *
+ * Ojo con `/q/analytics`: el gateway de Quarkus (8189) **no** publica `/analytics`; eso vive en su
+ * servicio de analitica (8185). Por eso tiene su propia ruta y va antes que el prefijo general `/q`.
  *
  * Uso:
  *   node tools/serve-verify.mjs [puerto]        # por defecto 4300
@@ -38,6 +42,8 @@ const RUTAS = [
   // Quarkus: su gateway ya habla /api y /ws, asi que el prefijo solo sirve para elegir a quien ir.
   { prefijo: '/q/ws', puerto: 8189, reenviar: '/ws', ws: true },
   { prefijo: '/q/api', puerto: 8189, reenviar: '/api' },
+  // La analitica de Quarkus es su servicio del 8185, no su gateway.
+  { prefijo: '/q/analytics', puerto: 8185, reenviar: '/analytics' },
   { prefijo: '/q', puerto: 8189, reenviar: '' },
   { prefijo: '/ws', puerto: 8089, reenviar: '/ws', ws: true },
   { prefijo: '/api', puerto: 8089, reenviar: '/api' },
