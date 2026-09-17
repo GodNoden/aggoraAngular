@@ -12,9 +12,10 @@
 
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, Signal, inject, signal } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { TimeoutError, firstValueFrom, timeout } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { analyticsUrl } from '../core/urls';
+import { REQUEST_TIMEOUT_MS } from './metrics.service';
 
 /** Una ventana calculada de un simbolo. */
 export interface AnalyticsWindow {
@@ -67,7 +68,9 @@ export class AnalyticsService {
     }));
     const url = analyticsUrl(environment.spring, limpio, minutes);
     try {
-      const crudo = await firstValueFrom(this.http.get<unknown>(url));
+      const crudo = await firstValueFrom(
+        this.http.get<unknown>(url).pipe(timeout(REQUEST_TIMEOUT_MS)),
+      );
       const ventanas = parseAnalytics(crudo);
       this.estado.update((actual) => ({
         ...actual,
@@ -81,7 +84,7 @@ export class AnalyticsService {
         ...actual,
         status: 'error',
         windows: [],
-        note: describirError(error, limpio),
+        note: describirError(error, limpio, url),
         fetchedAt: Date.now(),
       }));
     }
@@ -129,12 +132,15 @@ function numeroDe(valor: unknown): number {
   return typeof valor === 'number' && Number.isFinite(valor) ? valor : 0;
 }
 
-function describirError(error: unknown, symbol: string): string {
+function describirError(error: unknown, symbol: string, url: string): string {
+  if (error instanceof TimeoutError) {
+    return `no hubo respuesta en ${REQUEST_TIMEOUT_MS / 1000} s: ${url}`;
+  }
   if (error instanceof HttpErrorResponse) {
     if (error.status === 0) {
       return `no hay respuesta de analytics (${environment.spring.analytics}): el servicio no esta levantado o CORS lo bloquea. Recuerda que la leccion 5 lo deja en 503 a proposito`;
     }
     return `HTTP ${error.status} al pedir las ventanas de ${symbol}`;
   }
-  return `error inesperado al pedir las ventanas de ${symbol}: ${String(error)}`;
+  return `error inesperado en ${url} (ventanas de ${symbol}): ${String(error)}`;
 }

@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { MetricsService } from './metrics.service';
+import { MetricsService, REQUEST_TIMEOUT_MS } from './metrics.service';
 import { environment } from '../../environments/environment';
 
 /**
@@ -191,9 +191,10 @@ describe('MetricsService', () => {
     await enVuelo;
     const estado = servicio.panel('pulso', 'quarkus');
     expect(estado.status).toBe('error');
-    // El aviso dice a donde llamo: es la ruta del gateway de Quarkus, no un puerto suelto.
+    // El aviso dice a donde llamo: la ruta del gateway de Quarkus, y el endpoint completo.
     expect(estado.note).toContain(environment.quarkus.gateway);
-    expect(estado.note).toContain('CORS');
+    expect(estado.note).toContain('panel=pulso');
+    expect(estado.note).toContain('proxy');
   });
 
   it('una respuesta con forma invalida se marca como error, no como panel vacio', async () => {
@@ -245,5 +246,69 @@ describe('MetricsService', () => {
     expect(estado.status).toBe('loading');
     expect(estado.data).toBeNull();
     expect(estado.note).toBeNull();
+  });
+
+  it('una peticion que no responde nunca pasa a error con el endpoint y su tiempo', async () => {
+    jasmine.clock().install();
+    try {
+      const enVuelo = servicio.refreshAll();
+      await Promise.resolve();
+      const peticiones = http.match(() => true);
+      expect(peticiones.length).toBe(14);
+
+      // Nadie contesta. El reloj avanza mas alla del timeout.
+      jasmine.clock().tick(REQUEST_TIMEOUT_MS + 100);
+      await Promise.resolve();
+      await enVuelo;
+
+      const estado = servicio.panel('pulso', 'spring');
+      // Lo que importa: NO se queda en loading para siempre.
+      expect(estado.status).toBe('error');
+      expect(estado.note).toContain('no hubo respuesta');
+      // Y dice a que endpoint llamo, para poder comprobarlo sin adivinar.
+      expect(estado.note).toContain(environment.spring.gateway);
+      expect(estado.note).toContain('panel=pulso');
+
+      for (const peticion of peticiones) {
+        // Las que quedan vivas se cancelan al desmontar.
+        try {
+          peticion.flush(respuesta('x', [], 'n'));
+        } catch {
+          // Ya estaban canceladas por el timeout.
+        }
+      }
+    } finally {
+      jasmine.clock().uninstall();
+    }
+  });
+
+  it('requestedAt se apunta al lanzar: la UI puede saber cuanto lleva esperando', async () => {
+    const enVuelo = servicio.refreshAll();
+    await Promise.resolve();
+    for (const peticion of http.match(() => true)) {
+      peticion.flush(respuesta('x', [], 'n'));
+    }
+    await enVuelo;
+    const estado = servicio.panel('pulso', 'spring');
+    expect(estado.requestedAt).not.toBeNull();
+    expect(estado.requestedAt! <= Date.now()).toBeTrue();
+  });
+
+  it('un ciclo colgado no bloquea los siguientes: se descarta y se empieza otro', async () => {
+    // Primer ciclo: nadie responde, asi que se queda en vuelo.
+    void servicio.refreshAll();
+    await Promise.resolve();
+    expect(http.match(() => true).length).toBe(14);
+
+    // Han pasado mas de REQUEST_TIMEOUT_MS + 5 s (se falsea el arranque del ciclo en vez de esperar
+    // 15 segundos reales): el siguiente ciclo tiene que poder arrancar igualmente.
+    (servicio as unknown as { inicioCiclo: number }).inicioCiclo =
+      Date.now() - (REQUEST_TIMEOUT_MS + 6000);
+
+    void servicio.refreshAll();
+    await Promise.resolve();
+    // El ciclo nuevo salio a la red pese a que el anterior sigue colgado, y quedo constancia.
+    expect(http.match(() => true).length).toBe(14);
+    expect(servicio.descartados).toBe(1);
   });
 });

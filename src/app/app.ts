@@ -179,6 +179,7 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
       `change detection: total=${this.ciclos()}${ciclosPorSegundo !== null ? ` (last second: ${ciclosPorSegundo})` : ''}`,
       `loop detected: ${this.bucleDetectado()}`,
       `panels: ${JSON.stringify(porEstado)}`,
+      `ciclos de paneles descartados por colgarse: ${this.metrics.descartados}`,
       `socket spring: ${this.live.live().spring.state} | quarkus: ${this.live.live().quarkus.state}`,
       `messages parsed: ${this.live.messageCount()}`,
       `backend from the browser: ${this.backendReachable()}`,

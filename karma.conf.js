@@ -74,16 +74,16 @@ module.exports = function (config) {
       jasmine: {},
       clearContext: false,
     },
-    jasmineHtmlReporter: {
-      suppressAll: true,
-    },
     coverageReporter: {
       dir: path.join(__dirname, 'coverage'),
       subdir: '.',
       reporters: [{ type: 'html' }, { type: 'text-summary' }],
     },
-    reporters: ['progress', 'kjhtml'],
+    reporters: ['progress'],
     browsers: ['ChromeHeadlessNoSandbox'],
+    // Un unico navegador: con el Chrome/Edge de Windows, Karma lanzaba dos instancias y la suite
+    // se ejecutaba dos veces (el recuento salia duplicado).
+    concurrency: 1,
     customLaunchers: {
       ChromeHeadlessNoSandbox: {
         base: 'ChromeHeadless',
@@ -91,7 +91,15 @@ module.exports = function (config) {
         flags: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
       },
     },
-    restartOnFileChange: true,
+    // Sin re-ejecuciones: aqui se conectaba mas de un navegador y la suite corria dos veces, con
+    // recuentos duplicados. Una pasada, un navegador, un resultado.
+    autoWatch: false,
+    restartOnFileChange: false,
+    // El navegador de Windows tarda en cerrar y se desconecta del servidor de Karma, que ya esta
+    // apagandose: sin esto, una ejecucion con TODO en verde sale con codigo 1 y no se puede usar
+    // en un script.
+    browserDisconnectTolerance: 5,
+    singleRun: true,
     // Arrancar un .exe de Windows desde WSL tarda; de ahi los timeouts altos.
     captureTimeout: 180000,
     browserNoActivityTimeout: 120000,

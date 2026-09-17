@@ -141,6 +141,24 @@ The suite covers the parts where a mistake would be invisible until production:
 - the shell: it renders, and it boots with the **real** `appConfig` (so a missing provider fails the
   test instead of silently producing a black page).
 
+### Nothing waits for ever
+
+A dashboard that sits on a spinner cannot tell "the backend is slow" from "the backend is
+gone", and that difference is half the job. So every waiting state has a limit:
+
+- **Each metrics request has a timeout** (10 s). Past it, the panel switches to an error and
+  says which endpoint it called, so the failure can be checked without guessing.
+- **Each WebSocket has a handshake watchdog** (8 s). A socket that never opens is closed and
+  retried with the same increasing backoff; `connecting` is never a permanent state.
+- **A hung poll cycle is discarded**, not left holding the lock. Otherwise one stuck cycle
+  would silence every later one and the page would go quiet for ever.
+- **Every error message carries the URL.** "HTTP 502 in /api/metrics?panel=salud" is
+  actionable; "something failed" is not.
+- **A panel that is still waiting past the timeout says `still waiting`**, not `loading`.
+
+The tests cover the timeout path, the stale-cycle path and the URL in the error text, because
+these are the behaviours that turn a hang into a diagnosis.
+
 ### On this machine (WSL + the Windows Chrome)
 
 There is no Chrome inside WSL. `karma.conf.js` finds the Windows Chrome through WSL interop and

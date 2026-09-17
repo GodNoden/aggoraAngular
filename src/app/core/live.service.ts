@@ -27,6 +27,14 @@ import { wsUrl } from '../core/urls';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
 
+/**
+ * Cuanto se espera a que un WebSocket abra (ms).
+ *
+ * Un socket que se queda en CONNECTING para siempre deja la UI en "connecting" sin decir nada. A
+ * partir de aqui se corta, se apunta el motivo y se reintenta con espera creciente.
+ */
+export const SOCKET_OPEN_TIMEOUT_MS = 8000;
+
 /** Un punto de la ventana movil: lo que hace falta para pintar, ya en numeros. */
 export interface PulsePoint {
   /** Hora del servidor del snapshot, en milisegundos. */
@@ -88,6 +96,8 @@ export class LiveService {
   private readonly sockets = new Map<Stack, WebSocket>();
   private readonly temporizadores = new Map<Stack, ReturnType<typeof setTimeout>>();
   private readonly intentos = new Map<Stack, number>();
+  /** Vigilantes del handshake: si un socket no abre en `SOCKET_OPEN_TIMEOUT_MS`, se corta. */
+  private readonly vigilantes = new Map<Stack, ReturnType<typeof setTimeout>>();
   private parado = false;
 
   constructor() {
@@ -127,6 +137,7 @@ export class LiveService {
         clearTimeout(temporizador);
         this.temporizadores.delete(stack);
       }
+      this.cancelarVigilante(stack);
       const socket = this.sockets.get(stack);
       if (socket) {
         socket.onclose = null;
@@ -184,8 +195,32 @@ export class LiveService {
     this.sockets.set(stack, socket);
 
     console.info('[aggora] socket creado', stack, wsUrl(this.endpoints[stack]));
+    // Vigilante: un socket que se queda en CONNECTING no es un socket abierto. Si no abre a tiempo,
+    // se corta y la reconexion con espera creciente se encarga. Asi `connecting` nunca es eterno.
+    this.vigilantes.set(
+      stack,
+      setTimeout(() => {
+        this.vigilantes.delete(stack);
+        if (this.sockets.get(stack) !== socket) {
+          return;
+        }
+        console.warn(
+          `[aggora] el socket de ${stack} no abrio en ${SOCKET_OPEN_TIMEOUT_MS / 1000} s: se corta y se reintenta`,
+        );
+        socket.onclose = null;
+        try {
+          socket.close();
+        } catch {
+          // Ignorado: ya se va a reintentar.
+        }
+        this.sockets.delete(stack);
+        this.programarReconexion(stack);
+      }, SOCKET_OPEN_TIMEOUT_MS),
+    );
+
     socket.onopen = () => {
       console.info('[aggora] socket ABIERTO', stack);
+      this.cancelarVigilante(stack);
       this.intentos.set(stack, 0);
       this.actualizar(stack, (estado) => ({ ...estado, state: 'open' }));
     };
@@ -201,9 +236,19 @@ export class LiveService {
     };
 
     socket.onclose = () => {
+      this.cancelarVigilante(stack);
       this.sockets.delete(stack);
       this.programarReconexion(stack);
     };
+  }
+
+  /** Cancela el vigilante del handshake de un stack. */
+  private cancelarVigilante(stack: Stack): void {
+    const vigilante = this.vigilantes.get(stack);
+    if (vigilante) {
+      clearTimeout(vigilante);
+      this.vigilantes.delete(stack);
+    }
   }
 
   /** Espera creciente: 1s, 2s, 4s, 8s... con tope. */

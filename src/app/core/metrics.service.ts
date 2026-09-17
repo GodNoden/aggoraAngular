@@ -12,7 +12,7 @@
 
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, Signal, computed, inject, signal } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { TimeoutError, firstValueFrom, timeout } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   ComparablePanel,
@@ -30,6 +30,16 @@ import { metricsUrl } from '../core/urls';
 /** Estado de un panel en un stack. */
 export type PanelStatus = 'loading' | 'ok' | 'empty' | 'error';
 
+/**
+ * Cuanto se espera una respuesta antes de darla por perdida (ms).
+ *
+ * Regla de la casa: **ningun panel se queda en `loading` para siempre**. Esperar sin limite no
+ * distingue "el backend va lento" de "el backend no esta", y en un dashboard esa diferencia es la
+ * mitad del trabajo. Con esto, a los `requestTimeoutMs` un panel pasa a error y dice a que endpoint
+ * llamo.
+ */
+export const REQUEST_TIMEOUT_MS = 10000;
+
 export interface PanelState {
   readonly panel: PanelName;
   readonly stack: Stack;
@@ -41,6 +51,8 @@ export interface PanelState {
   readonly warnings: readonly string[];
   /** Cuando se pidio por ultima vez (ms epoch). */
   readonly fetchedAt: number | null;
+  /** Cuando se lanzo la peticion en curso, para poder avisar si tarda de mas. */
+  readonly requestedAt: number | null;
   /** Cuanto tardo la peticion (ms). */
   readonly elapsedMs: number | null;
 }
@@ -54,6 +66,7 @@ const INICIAL = (panel: PanelName, stack: Stack): PanelState => ({
   warnings: [],
   fetchedAt: null,
   elapsedMs: null,
+  requestedAt: null,
 });
 
 /** Los paneles que se piden de uno en uno. `comparativa` se pide aparte, con su `de`. */
@@ -83,6 +96,10 @@ export class MetricsService {
   private readonly comparativaDe = signal<ComparablePanel>('pulso');
   private temporizador: ReturnType<typeof setInterval> | null = null;
   private pidiendo = false;
+  /** Cuando empezo el ciclo en curso, para poder detectar un ciclo colgado. */
+  private inicioCiclo: number | null = null;
+  /** Ciclos descartados por quedarse colgados: si esto sube, algo no responde. */
+  private ciclosDescartados = 0;
 
   /** Panel que se esta comparando en el modo lado a lado. */
   readonly comparisonPanel: Signal<ComparablePanel> = this.comparativaDe.asReadonly();
@@ -105,6 +122,11 @@ export class MetricsService {
   readonly hasErrors = computed(() =>
     Object.values(this.estados()).some((estado) => estado.status === 'error'),
   );
+
+  /** Cuantos ciclos se descartaron por colgarse: 0 es lo sano. */
+  get descartados(): number {
+    return this.ciclosDescartados;
+  }
 
   /** Estado de un panel en un stack. */
   panel(panel: PanelName, stack: Stack): PanelState {
@@ -142,9 +164,21 @@ export class MetricsService {
   /** Refresco inmediato de todo (boton "refresh"). */
   async refreshAll(): Promise<void> {
     if (this.pidiendo) {
-      return;
+      // Si el ciclo anterior se quedo colgado mas de la cuenta, se le retira la vez: si no, un unico
+      // cuelgue bloquea todos los sondeos siguientes y la pagina se queda muda para siempre.
+      const transcurrido = Date.now() - (this.inicioCiclo ?? 0);
+      if (this.inicioCiclo !== null && transcurrido > REQUEST_TIMEOUT_MS + 5000) {
+        console.warn(
+          `[aggora] el ciclo de paneles lleva ${transcurrido} ms colgado: se descarta y se empieza otro`,
+        );
+        this.pidiendo = false;
+        this.ciclosDescartados += 1;
+      } else {
+        return;
+      }
     }
     this.pidiendo = true;
+    this.inicioCiclo = Date.now();
     try {
       const tareas: Promise<void>[] = [];
       for (const stack of STACKS) {
@@ -156,6 +190,7 @@ export class MetricsService {
       await Promise.all(tareas);
     } finally {
       this.pidiendo = false;
+      this.inicioCiclo = null;
     }
   }
 
@@ -171,10 +206,14 @@ export class MetricsService {
   private async pedir(panel: PanelName, stack: Stack, de?: ComparablePanel): Promise<void> {
     const inicio = Date.now();
     const url = metricsUrl(this.endpoints[stack], panel, de);
+    // Se apunta el arranque de la peticion: asi la UI puede distinguir "va lento" de "no hay nadie".
+    this.escribir(panel, stack, { status: 'loading', requestedAt: inicio });
     // Traza de consola (F12): se ve si la peticion sale y si vuelve. Barata y util.
     console.info('[aggora] pidiendo', url);
     try {
-      const crudo = await firstValueFrom(this.http.get<unknown>(url));
+      const crudo = await firstValueFrom(
+        this.http.get<unknown>(url).pipe(timeout(REQUEST_TIMEOUT_MS)),
+      );
       console.info('[aggora] respuesta OK', panel, stack, Date.now() - inicio, 'ms');
       const datos = parseMetricsResponse(crudo);
       const transcurrido = Date.now() - inicio;
@@ -202,7 +241,7 @@ export class MetricsService {
       this.escribir(panel, stack, {
         status: 'error',
         data: null,
-        note: describirError(error, panel, stack),
+        note: describirError(error, panel, stack, url),
         warnings: [],
         fetchedAt: Date.now(),
         elapsedMs: Date.now() - inicio,
@@ -222,22 +261,31 @@ function clave(panel: PanelName, stack: Stack): string {
   return `${panel}:${stack}`;
 }
 
-/** Traduce el error HTTP a una frase util, incluidos los codigos del catalogo cerrado. */
-function describirError(error: unknown, panel: PanelName, stack: Stack): string {
+/** Traduce el error a una frase util, incluidos los codigos del catalogo cerrado. */
+function describirError(
+  error: unknown,
+  panel: PanelName,
+  stack: Stack,
+  url: string,
+): string {
+  // Un timeout no es un error HTTP: la peticion salio y nadie contesto.
+  if (error instanceof TimeoutError) {
+    return `no hubo respuesta en ${REQUEST_TIMEOUT_MS / 1000} s: ${url}`;
+  }
   if (error instanceof HttpErrorResponse) {
     if (error.status === 0) {
-      return `no hay respuesta del gateway ${stack} (${environment[stack].gateway}): el backend no esta levantado o CORS lo bloquea`;
+      return `no hay respuesta del gateway ${stack} (${url}): el backend no esta levantado, o el proxy no llega`;
     }
     const cuerpo = error.error;
     if (cuerpo && typeof cuerpo === 'object' && 'error' in cuerpo) {
       const mensaje = (cuerpo as { error?: unknown }).error;
       const detalle = (cuerpo as { detalle?: unknown }).detalle;
       const cola = Array.isArray(detalle) ? ` | catalogo: ${detalle.join(', ')}` : typeof detalle === 'string' ? ` | ${detalle}` : '';
-      return `HTTP ${error.status}: ${String(mensaje)}${cola}`;
+      return `HTTP ${error.status} en ${url}: ${String(mensaje)}${cola}`;
     }
-    return `HTTP ${error.status} al pedir el panel "${panel}"`;
+    return `HTTP ${error.status} en ${url}`;
   }
-  return `error inesperado al pedir el panel "${panel}": ${String(error)}`;
+  return `error inesperado en ${url} (panel "${panel}"): ${String(error)}`;
 }
 
 /** Ultimo valor numerico de una serie de un panel, o `null`. Atajo para la UI. */

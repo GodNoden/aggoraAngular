@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { REQUEST_TIMEOUT_MS } from '../core/metrics.service';
 import { PanelDoc } from '../core/panel-docs';
 import { PanelState } from '../core/metrics.service';
 import { formatClock, formatAge } from './format';
@@ -23,7 +24,7 @@ import { formatClock, formatAge } from './format';
         </div>
         <div class="badges">
           @if (state().status === 'loading') {
-            <span class="badge loading">loading</span>
+            <span class="badge loading">{{ tardaMas() ? 'still waiting' : 'loading' }}</span>
           } @else if (state().status === 'empty') {
             <span class="badge empty">no data</span>
           } @else if (state().status === 'error') {
@@ -200,6 +201,16 @@ export class PanelCard {
    * `ExpressionChangedAfterItHasBeenChecked`; con un input, el valor es estable dentro del ciclo.
    */
   readonly now = input(Date.now());
+  /**
+   * Si el panel lleva demasiado tiempo sin resolverse, se avisa en la cabecera.
+   *
+   * Un `loading` eterno no distingue "va lento" de "no hay nadie": pasado un margen
+   * prudencial (el mismo que el timeout de la peticion) el estado se cuenta.
+   */
+  readonly tardaMas = computed(() => {
+    const estado = this.state();
+    return estado.status === 'loading' && this.now() - (estado.requestedAt ?? this.now()) > REQUEST_TIMEOUT_MS;
+  });
 
   clock(valor: number | null): string {
     return formatClock(valor);
