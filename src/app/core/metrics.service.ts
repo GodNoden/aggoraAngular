@@ -10,9 +10,7 @@
  *    rellena con nada.**
  */
 
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, Signal, computed, inject, signal } from '@angular/core';
-import { TimeoutError, firstValueFrom, timeout } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   ComparablePanel,
@@ -26,19 +24,12 @@ import {
 } from '../core/contract';
 import { contractWarnings, lastValue, parseMetricsResponse } from '../core/contract.parser';
 import { metricsUrl } from '../core/urls';
+import { REQUEST_TIMEOUT_MS, describirErrorHttp, getJson } from './http';
 
 /** Estado de un panel en un stack. */
 export type PanelStatus = 'loading' | 'ok' | 'empty' | 'error';
 
-/**
- * Cuanto se espera una respuesta antes de darla por perdida (ms).
- *
- * Regla de la casa: **ningun panel se queda en `loading` para siempre**. Esperar sin limite no
- * distingue "el backend va lento" de "el backend no esta", y en un dashboard esa diferencia es la
- * mitad del trabajo. Con esto, a los `requestTimeoutMs` un panel pasa a error y dice a que endpoint
- * llamo.
- */
-export const REQUEST_TIMEOUT_MS = 10000;
+export { REQUEST_TIMEOUT_MS } from './http';
 
 export interface PanelState {
   readonly panel: PanelName;
@@ -74,7 +65,6 @@ const PANELES_SIMPLES = PANELS.filter((panel) => panel !== 'comparativa') as rea
 
 @Injectable({ providedIn: 'root' })
 export class MetricsService {
-  private readonly http = inject(HttpClient);
 
   private readonly endpoints: Readonly<Record<Stack, StackEndpoints>> = {
     spring: environment.spring,
@@ -211,9 +201,7 @@ export class MetricsService {
     // Traza de consola (F12): se ve si la peticion sale y si vuelve. Barata y util.
     console.info('[aggora] pidiendo', url);
     try {
-      const crudo = await firstValueFrom(
-        this.http.get<unknown>(url).pipe(timeout(REQUEST_TIMEOUT_MS)),
-      );
+      const crudo = await getJson(url);
       console.info('[aggora] respuesta OK', panel, stack, Date.now() - inicio, 'ms');
       const datos = parseMetricsResponse(crudo);
       const transcurrido = Date.now() - inicio;
@@ -241,7 +229,7 @@ export class MetricsService {
       this.escribir(panel, stack, {
         status: 'error',
         data: null,
-        note: describirError(error, panel, stack, url),
+        note: describirErrorHttp(error, `panel "${panel}" (${stack})`),
         warnings: [],
         fetchedAt: Date.now(),
         elapsedMs: Date.now() - inicio,
@@ -259,33 +247,6 @@ export class MetricsService {
 
 function clave(panel: PanelName, stack: Stack): string {
   return `${panel}:${stack}`;
-}
-
-/** Traduce el error a una frase util, incluidos los codigos del catalogo cerrado. */
-function describirError(
-  error: unknown,
-  panel: PanelName,
-  stack: Stack,
-  url: string,
-): string {
-  // Un timeout no es un error HTTP: la peticion salio y nadie contesto.
-  if (error instanceof TimeoutError) {
-    return `no hubo respuesta en ${REQUEST_TIMEOUT_MS / 1000} s: ${url}`;
-  }
-  if (error instanceof HttpErrorResponse) {
-    if (error.status === 0) {
-      return `no hay respuesta del gateway ${stack} (${url}): el backend no esta levantado, o el proxy no llega`;
-    }
-    const cuerpo = error.error;
-    if (cuerpo && typeof cuerpo === 'object' && 'error' in cuerpo) {
-      const mensaje = (cuerpo as { error?: unknown }).error;
-      const detalle = (cuerpo as { detalle?: unknown }).detalle;
-      const cola = Array.isArray(detalle) ? ` | catalogo: ${detalle.join(', ')}` : typeof detalle === 'string' ? ` | ${detalle}` : '';
-      return `HTTP ${error.status} en ${url}: ${String(mensaje)}${cola}`;
-    }
-    return `HTTP ${error.status} en ${url}`;
-  }
-  return `error inesperado en ${url} (panel "${panel}"): ${String(error)}`;
 }
 
 /** Ultimo valor numerico de una serie de un panel, o `null`. Atajo para la UI. */

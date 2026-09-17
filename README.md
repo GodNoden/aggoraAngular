@@ -141,6 +141,31 @@ The suite covers the parts where a mistake would be invisible until production:
 - the shell: it renders, and it boots with the **real** `appConfig` (so a missing provider fails the
   test instead of silently producing a black page).
 
+### The HTTP layer is `fetch`, not `HttpClient`
+
+There is a small client in `core/http.ts` built on `fetch`, and the reason is measured, not
+stylistic. In this environment Angular's `HttpClient` requests never settled: the panels stayed
+on `loading` for ever, while the same requests made with `fetch` answered in ~150 ms. The
+comparison was run inside the app itself, one call after the other:
+
+```
+fetch en la app: HTTP 200, 281 B en 154 ms      <- works
+HttpClient en la app: (never answers)           <- does not
+```
+
+The network, the gateway and the WebSocket were all fine at the time (the raw probe in the
+page measures 200s and an open socket in ~250 ms), so the client layer was the only suspect
+left.
+
+What the client gives the app, and why it is worth having even without that bug:
+
+- **A timeout on every request**, with `AbortController`, so the house rule holds at the source:
+  no panel waits for ever.
+- **Errors that name the endpoint**, distinguishing a timeout from an HTTP error, and keeping
+  the closed catalog's `{error, detalle}` message.
+- No automatic JSON parsing: the contract parser is already defensive and lives in
+  `contract.parser.ts`.
+
 ### Nothing waits for ever
 
 A dashboard that sits on a spinner cannot tell "the backend is slow" from "the backend is

@@ -10,12 +10,10 @@
  * se acepta la lista y, por si acaso, tambien un objeto con `windows`.
  */
 
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, Signal, inject, signal } from '@angular/core';
-import { TimeoutError, firstValueFrom, timeout } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { analyticsUrl } from '../core/urls';
-import { REQUEST_TIMEOUT_MS } from './metrics.service';
+import { describirErrorHttp, getJson } from './http';
 
 /** Una ventana calculada de un simbolo. */
 export interface AnalyticsWindow {
@@ -36,7 +34,6 @@ export type AnalyticsStatus = 'idle' | 'loading' | 'ok' | 'empty' | 'error';
 
 @Injectable({ providedIn: 'root' })
 export class AnalyticsService {
-  private readonly http = inject(HttpClient);
 
   private readonly estado = signal<{
     status: AnalyticsStatus;
@@ -68,9 +65,7 @@ export class AnalyticsService {
     }));
     const url = analyticsUrl(environment.spring, limpio, minutes);
     try {
-      const crudo = await firstValueFrom(
-        this.http.get<unknown>(url).pipe(timeout(REQUEST_TIMEOUT_MS)),
-      );
+      const crudo = await getJson(url);
       const ventanas = parseAnalytics(crudo);
       this.estado.update((actual) => ({
         ...actual,
@@ -84,7 +79,7 @@ export class AnalyticsService {
         ...actual,
         status: 'error',
         windows: [],
-        note: describirError(error, limpio, url),
+        note: describirErrorHttp(error, `ventanas de ${limpio}`),
         fetchedAt: Date.now(),
       }));
     }
@@ -130,17 +125,4 @@ function textoDe(valor: unknown): string {
 
 function numeroDe(valor: unknown): number {
   return typeof valor === 'number' && Number.isFinite(valor) ? valor : 0;
-}
-
-function describirError(error: unknown, symbol: string, url: string): string {
-  if (error instanceof TimeoutError) {
-    return `no hubo respuesta en ${REQUEST_TIMEOUT_MS / 1000} s: ${url}`;
-  }
-  if (error instanceof HttpErrorResponse) {
-    if (error.status === 0) {
-      return `no hay respuesta de analytics (${environment.spring.analytics}): el servicio no esta levantado o CORS lo bloquea. Recuerda que la leccion 5 lo deja en 503 a proposito`;
-    }
-    return `HTTP ${error.status} al pedir las ventanas de ${symbol}`;
-  }
-  return `error inesperado en ${url} (ventanas de ${symbol}): ${String(error)}`;
 }

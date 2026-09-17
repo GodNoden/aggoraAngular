@@ -9,7 +9,8 @@
     "watch": "ng build --watch --configuration development",
     "test": "node tools/run-tests.mjs",
     "test:watch": "ng test",
-    "verify:live": "node tools/live-check.mjs"
+    "verify:live": "node tools/live-check.mjs",
+    "serve:built": "node tools/serve-verify.mjs"
   },
   "prettier": {
     "printWidth": 100,

@@ -152,10 +152,26 @@
       (async function () {
         anotar('origin: ' + location.origin + ' | href: ' + location.href);
         anotar('tiempo de carga de la pagina: ' + Math.round(performance.now()) + ' ms');
-        await probar('mismo origen (favicon)', '/favicon.ico', 5000);
-        await probar('gateway /api', '/api/metrics?panel=pulso', 6000);
-        await probar('gateway /q/api', '/q/api/metrics?panel=pulso', 6000);
-        await probar('analytics /analytics', '/analytics?symbol=EUR%2FUSD&minutes=3', 6000);
+        /*
+         * Todo EN PARALELO y con un tope corto.
+         *
+         * En serie, si una peticion no vuelve, las siguientes no se llegan a medir y el informe se
+         * queda a medias (que es justo lo que paso). En paralelo, en 4 segundos se sabe que ruta
+         * funciona y cual no.
+         *
+         * Se prueban las dos formas a proposito: la del proxy (mismo origen) y la directa al
+         * gateway. Si la directa funciona y la del proxy no, el culpable es el proxy, y se puede
+         * quitar.
+         */
+        await Promise.all([
+          probar('mismo origen (favicon)', '/favicon.ico', 4000),
+          probar('proxy /api (mismo origen)', '/api/metrics?panel=pulso', 4000),
+          probar('proxy /q/api (mismo origen)', '/q/api/metrics?panel=pulso', 4000),
+          probar('proxy /analytics', '/analytics?symbol=EUR%2FUSD&minutes=3', 4000),
+          probar('DIRECTO Spring :8089', 'http://localhost:8089/api/metrics?panel=pulso', 4000),
+          probar('DIRECTO Quarkus :8189', 'http://localhost:8189/api/metrics?panel=pulso', 4000),
+          probar('DIRECTO analytics :8085', 'http://localhost:8085/analytics?symbol=EUR%2FUSD&minutes=3', 4000),
+        ]);
         // El WebSocket se mide aparte: no es fetch y falla de otra manera.
         try {
           var inicioWs = Date.now();

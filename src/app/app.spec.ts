@@ -1,6 +1,4 @@
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { App } from './app';
 import { appConfig } from './app.config';
 import { LiveService } from './core/live.service';
@@ -10,14 +8,12 @@ import { MetricsService } from './core/metrics.service';
  * El shell de la pagina.
  *
  * El componente abre un WebSocket de verdad y pide paneles de verdad. En un test eso no se puede
- * dejar suelto: aqui se sustituye el WebSocket por un doble (no se toca la red) y las peticiones
- * HTTP se responden con `HttpTestingController`. Sin eso, Karma avisa de que quedan tareas vivas y
- * los tests se cuelgan, que es justo lo que se quiere evitar.
+ * dejar suelto: aqui se sustituyen el WebSocket y `fetch` por dobles (no se toca la red). Sin eso,
+ * Karma avisa de que quedan tareas vivas y los tests se cuelgan, que es justo lo que se quiere
+ * evitar.
  *
  * Ojo con los providers: **se usa el `appConfig` de verdad**, no una lista hecha a mano. Un test que
- * se inventa sus providers deja de comprobar lo que se compila; con el config real, si falta
- * `provideHttpClient()` el test se pone rojo, que es exactamente lo que tiene que pasar (paso: la
- * app se quedo en negro porque al config le faltaba el cliente HTTP y ningun test lo vio).
+ * se inventa sus providers deja de comprobar lo que se compila.
  */
 class WebSocketFalso {
   onopen: (() => void) | null = null;
@@ -30,16 +26,38 @@ class WebSocketFalso {
 
 describe('App', () => {
   const WebSocketOriginal = globalThis.WebSocket;
-  let http: HttpTestingController;
+  const fetchOriginal = globalThis.fetch;
+  /** Peticiones de paneles pendientes, para responderlas desde el test. */
+  let pendientes: (() => void)[] = [];
 
   beforeEach(async () => {
     (globalThis as { WebSocket: unknown }).WebSocket = WebSocketFalso;
+    pendientes = [];
+    // Doble de `fetch`: la app pide los paneles por ahi.
+    (globalThis as { fetch: unknown }).fetch = (url: string | URL) =>
+      new Promise((resolver) => {
+        pendientes.push(() =>
+          resolver({
+            ok: true,
+            status: 200,
+            text: () =>
+              Promise.resolve(
+                JSON.stringify({
+                  panel: 'pulso',
+                  ts: new Date().toISOString(),
+                  stack: 'spring',
+                  series: [{ label: 'entrada', points: [[1, 36.1]] }],
+                }),
+              ),
+          } as unknown as Response),
+        );
+        void url;
+      });
     await TestBed.configureTestingModule({
       imports: [App],
-      // El config real (sin el HttpClient de verdad: eso lo pone el testing) mas el doble de HTTP.
-      providers: [...appConfig.providers, provideHttpClient(), provideHttpClientTesting()],
+      // El config real de la app: si le falta algo, el test se pone rojo.
+      providers: [...appConfig.providers],
     }).compileComponents();
-    http = TestBed.inject(HttpTestingController);
   });
 
   afterEach(() => {
@@ -47,17 +65,13 @@ describe('App', () => {
     const fixture = TestBed.createComponent(App);
     fixture.componentRef.destroy();
     (globalThis as { WebSocket: unknown }).WebSocket = WebSocketOriginal;
+    (globalThis as { fetch: unknown }).fetch = fetchOriginal;
   });
 
   /** Responde a todo lo pendiente con un panel valido. */
   function responderPendientes(): void {
-    for (const peticion of http.match(() => true)) {
-      peticion.flush({
-        panel: 'pulso',
-        ts: new Date().toISOString(),
-        stack: 'spring',
-        series: [{ label: 'entrada', points: [[1, 36.1]] }],
-      });
+    for (const responder of pendientes.splice(0)) {
+      responder();
     }
   }
 
@@ -116,7 +130,7 @@ describe('App', () => {
     fixture.detectChanges();
     expect(TestBed.inject(LiveService).live().spring.state).toBe('connecting');
     // Los paneles se piden en cuanto arranca la app, sin esperar al primer intervalo.
-    expect(http.match(() => true).length).toBeGreaterThan(0);
+    expect(pendientes.length).toBeGreaterThan(0);
     fixture.componentRef.destroy();
     TestBed.inject(MetricsService).stop();
     responderPendientes();
