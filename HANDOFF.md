@@ -271,13 +271,27 @@ origin first is the step that was skipped here, and it would have avoided most o
 1. **Reproduce it in a real browser and read the Network tab.** Specifically: is
    `/api/metrics?panel=pulso` `pending` or `200`? That single answer splits the problem in two
    and it was never obtained. Everything else was guessing around it.
-2. **Reload with the probe disabled.** The probe in `index.html` opens fetches and a WebSocket
+2. **Explain why the cycle stops after exactly five requests.** From the bridge log, every cycle
+   is the same five requests and then silence, never reaching `particiones`:
+
+   ```
+   /api/metrics?panel=pulso            -> 200
+   /q/api/metrics?panel=pulso          -> 200
+   /analytics?...                      -> 200
+   /api/metrics?panel=pulso&_t=...     -> 200
+   /api/metrics?panel=lag&_t=...       -> 200   <- and the cycle ends here
+   ```
+
+   It is deterministic, not random, so there is a concrete limit being hit at five: a browser
+   connection cap, something in the bridge, or the page being reloaded mid-cycle. This is the
+   sharpest lead available and it is worth starting here.
+3. **Reload with the probe disabled.** The probe in `index.html` opens fetches and a WebSocket
    of its own at page load. It is the only thing that runs in the fresh session which does not
    run again on reload in the same way. Remove it and see whether the reload symptom changes.
-3. **Serve the app from the backend's origin.** The deployment plan is "one origin, gateway in
+4. **Serve the app from the backend's origin.** The deployment plan is "one origin, gateway in
    front" anyway. If the page and the API are literally the same server, this whole class of
    problem disappears, and it is what has to happen in production regardless.
-4. **Drop the proxy from the picture** by configuring absolute backend URLs and adding
+5. **Drop the proxy from the picture** by configuring absolute backend URLs and adding
    `http://localhost:4300` to the backend's CORS allowlist (`aggora.ui.allowed-origins`), then
    compare.
 
