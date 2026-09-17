@@ -1,0 +1,31 @@
+/*
+ * El shell no necesita estilos propios: la rejilla, la barra superior y las tarjetas viven en
+ * `src/styles.css` (tokens globales, menos peso en el presupuesto por componente).
+ *
+ * Aqui van solo los dos ajustes que si son del shell:
+ *
+ *  - En modo "Spring + Quarkus" las dos columnas van una al lado de la otra (el mismo dato en dos
+ *    columnas es la firma del proyecto).
+ *  - Un solo stack ocupa el ancho completo.
+ */
+
+:host {
+  display: block;
+}
+
+.column {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.columns.dos .column {
+  flex: 1 1 44%;
+  min-width: 320px;
+}
