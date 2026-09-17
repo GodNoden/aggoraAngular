@@ -21,6 +21,16 @@
       function dejarConstancia(motivo) {
         fallos.push(motivo);
         try {
+          if (!document.body) {
+            document.addEventListener(
+              'DOMContentLoaded',
+              function () {
+                dejarConstancia(motivo);
+              },
+              { once: true },
+            );
+            return;
+          }
           var pre = document.getElementById('boot-errors');
           if (!pre) {
             pre = document.createElement('pre');
@@ -77,6 +87,13 @@
        */
       function pintar() {
         try {
+          // Este script vive en el <head>, asi que al arrancar todavia NO existe <body>: hay que
+          // esperar al DOM. Sin esto, appendChild(null) lanzaba TypeError y el bloque no aparecia
+          // nunca, que es exactamente lo que se veia (nada).
+          if (!document.body) {
+            document.addEventListener('DOMContentLoaded', pintar, { once: true });
+            return;
+          }
           var pre = document.getElementById('net-probe');
           if (!pre) {
             pre = document.createElement('pre');
@@ -179,6 +196,7 @@
       })();
       // Aunque el script se quede a medias, se pinta lo que haya a los 3 s.
       setTimeout(pintar, 3000);
+      document.addEventListener('DOMContentLoaded', pintar, { once: true });
     })();
   </script>
 </head>

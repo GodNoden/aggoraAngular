@@ -235,9 +235,13 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
   }
 
   constructor() {
+    traza('App: constructor inicio');
     void this.medirBackend();
+    traza('App: medirBackend lanzado');
     this.live.start();
+    traza('App: live.start hecho');
     this.metrics.start();
+    traza('App: metrics.start hecho');
     void this.analytics.query(
       environment.defaultAnalyticsSymbol,
       environment.defaultAnalyticsMinutes,
@@ -411,4 +415,41 @@ export class App implements OnDestroy, DoCheck, AfterViewChecked {
   /** Informe de diagnostico visible en la pagina (`?diag=1`). */
   readonly modoDiag =
     typeof location !== 'undefined' && new URLSearchParams(location.search).has('diag');
+}
+
+/**
+ * Traza de arranque.
+ *
+ * Se apunta en `window.__aggoraTrace` en vez de en la consola porque en este equipo la consola del
+ * navegador no siempre esta a mano, y el sintoma (la app pinta pero no carga datos) exige saber
+ * hasta que linea del constructor se ejecuto.
+ */
+function traza(paso: string): void {
+  const global = globalThis as { __aggoraTrace?: string[] };
+  global.__aggoraTrace = global.__aggoraTrace ?? ['(traza inicializada)'];
+  global.__aggoraTrace.push(`${Math.round(performance.now())} ms  ${paso}`);
+
+  // Se pinta tambien en el DOM, para que se pueda leer sin consola ni informe.
+  if (typeof document !== 'undefined') {
+    const pintar = (): void => {
+      if (!document.body) {
+        return;
+      }
+      let pre = document.getElementById('boot-trace');
+      if (!pre) {
+        pre = document.createElement('pre');
+        pre.id = 'boot-trace';
+        pre.style.cssText =
+          'margin:12px;padding:10px;border:1px solid #2d6a4f;border-radius:8px;background:#0d1a14;' +
+          'color:#b7f5d8;font:11px/1.6 monospace;white-space:pre-wrap;';
+        document.body.appendChild(pre);
+      }
+      pre.textContent = 'Boot trace\n' + global.__aggoraTrace!.join('\n');
+    };
+    if (document.body) {
+      pintar();
+    } else {
+      document.addEventListener('DOMContentLoaded', pintar, { once: true });
+    }
+  }
 }

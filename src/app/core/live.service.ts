@@ -90,6 +90,10 @@ export class LiveService {
   private readonly intentos = new Map<Stack, number>();
   private parado = false;
 
+  constructor() {
+    trazaArranque('LiveService: construido');
+  }
+
   /** Estado en vivo de los dos stacks. */
   readonly live: Signal<Readonly<Record<Stack, LiveState>>> = this.estados.asReadonly();
 
@@ -179,12 +183,15 @@ export class LiveService {
     }
     this.sockets.set(stack, socket);
 
+    console.info('[aggora] socket creado', stack, wsUrl(this.endpoints[stack]));
     socket.onopen = () => {
+      console.info('[aggora] socket ABIERTO', stack);
       this.intentos.set(stack, 0);
       this.actualizar(stack, (estado) => ({ ...estado, state: 'open' }));
     };
 
     socket.onmessage = (evento: MessageEvent<string>) => {
+      console.info('[aggora] mensaje recibido', stack, String(evento.data).slice(0, 60));
       this.recibir(stack, String(evento.data));
     };
 
@@ -284,4 +291,11 @@ function contar(
   kind: string,
 ): Readonly<Record<string, number>> {
   return { ...contadores, [kind]: (contadores[kind] ?? 0) + 1 };
+}
+
+/** Traza compartida de arranque, leible en `window.__aggoraTrace`. */
+function trazaArranque(paso: string): void {
+  const global = globalThis as { __aggoraTrace?: string[] };
+  global.__aggoraTrace = global.__aggoraTrace ?? [];
+  global.__aggoraTrace.push(`${Math.round(performance.now())} ms  ${paso}`);
 }

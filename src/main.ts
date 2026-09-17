@@ -10,7 +10,13 @@ import { App } from './app/app';
  * navegador corre en Windows mientras el codigo vive en WSL, asi que la consola no siempre esta a
  * mano. El `catch` no se traga nada: registra y avisa.
  */
-bootstrapApplication(App, appConfig).catch((error) => {
+bootstrapApplication(App, appConfig)
+  .then(() => {
+    const global = globalThis as { __aggoraTrace?: string[] };
+    global.__aggoraTrace = global.__aggoraTrace ?? [];
+    global.__aggoraTrace.push(`${Math.round(performance.now())} ms  main: bootstrap resuelto (App creado)`);
+    console.info('[aggora] bootstrap OK a los', Math.round(performance.now()), 'ms');
+  }).catch((error) => {
   console.error(error);
   if (typeof document !== 'undefined') {
     const aviso = document.createElement('pre');

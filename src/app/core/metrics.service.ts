@@ -68,6 +68,10 @@ export class MetricsService {
     quarkus: environment.quarkus,
   };
 
+  constructor() {
+    trazaArranque('MetricsService: construido');
+  }
+
   private readonly estados = signal<Readonly<Record<string, PanelState>>>(
     Object.fromEntries(
       STACKS.flatMap((stack) =>
@@ -167,8 +171,11 @@ export class MetricsService {
   private async pedir(panel: PanelName, stack: Stack, de?: ComparablePanel): Promise<void> {
     const inicio = Date.now();
     const url = metricsUrl(this.endpoints[stack], panel, de);
+    // Traza de consola (F12): se ve si la peticion sale y si vuelve. Barata y util.
+    console.info('[aggora] pidiendo', url);
     try {
       const crudo = await firstValueFrom(this.http.get<unknown>(url));
+      console.info('[aggora] respuesta OK', panel, stack, Date.now() - inicio, 'ms');
       const datos = parseMetricsResponse(crudo);
       const transcurrido = Date.now() - inicio;
       if (!datos) {
@@ -191,6 +198,7 @@ export class MetricsService {
         elapsedMs: transcurrido,
       });
     } catch (error) {
+      console.warn('[aggora] peticion FALLIDA', panel, stack, error);
       this.escribir(panel, stack, {
         status: 'error',
         data: null,
@@ -236,4 +244,11 @@ function describirError(error: unknown, panel: PanelName, stack: Stack): string 
 export function valorDe(estado: PanelState, label: string): number | null {
   const serie = estado.data?.series.find((candidata) => candidata.label === label);
   return serie ? lastValue(serie) : null;
+}
+
+/** Traza compartida de arranque, leible en `window.__aggoraTrace`. */
+function trazaArranque(paso: string): void {
+  const global = globalThis as { __aggoraTrace?: string[] };
+  global.__aggoraTrace = global.__aggoraTrace ?? [];
+  global.__aggoraTrace.push(`${Math.round(performance.now())} ms  ${paso}`);
 }
