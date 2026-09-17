@@ -24,9 +24,9 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const argumento = (nombre, porDefecto) => {
   const encontrado = process.argv.find((arg) => arg.startsWith(`--${nombre}=`));

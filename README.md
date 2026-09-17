@@ -1,349 +1,178 @@
-# Aggora dashboard
+# Aggora, explicado
 
-A **read-only** visual dashboard for Aggora, a Kafka event pipeline for market data that is
-implemented **twice**: once in Spring Boot and once in Quarkus. This app shows both, side by side.
+Un panel de **solo lectura** que explica que esta haciendo el backend de Aggora: un pipeline de
+eventos de mercado de Kafka implementado **dos veces**, una en Spring Boot y otra en Quarkus.
 
-It is an Angular 20 standalone application. It never writes anything: every endpoint it touches is a
-`GET` or a WebSocket, and the backend contract has no write endpoint at all. It is not the source of
-truth for any number it displays — Kafka and Prometheus are.
+No es un Grafana con otro color. Grafana contesta "cuanto vale esta serie en el tiempo" a quien ya
+sabe que significa la serie. Esto contesta otra pregunta: **que esta haciendo el pipeline ahora
+mismo, y como se veria si estuviera roto**. Por eso cada panel lleva, al lado del dato, cuatro
+frases en lenguaje llano: que estas viendo, por que importa, que es lo normal y que se ve cuando se
+rompe. **Los numeros son la evidencia; el texto es el producto.**
 
-The contract lives in the backend repository: `docs/CONTRACT.md` (short, normative) and
-`docs/dashboard.md` (long, with the reasoning).
+La verdad no esta aqui: esta en Kafka (los topics) y en Prometheus (las series). Esta pagina no
+escribe nada — el contrato no tiene un solo endpoint de escritura — y no rellena huecos: si un panel
+viene vacio, repite la explicacion del backend y no inventa una grafica.
 
 ---
 
-## What it shows
+## Como se lee la pagina
 
-### 1. The live view
+De arriba abajo:
 
-| Panel | What you are looking at | Why it matters |
+1. **El camino del dato**, cinco cajas de izquierda a derecha: simulador de mercado → Kafka
+   (`market.ticks.raw`) → normalizador → motor de streams → Prometheus y los gateways. Cada caja
+   tiene un color segun el dato que le corresponde, y debajo dice en que panel se ve. Es la respuesta
+   de un vistazo a "que esta pasando".
+2. **El latido**: lo que el gateway empuja por WebSocket cada segundo. La foto por segundo (ultimo
+   valor de cada simbolo) y las alertas y posiciones, que no esperan al segundo.
+3. **El catalogo**: seis paneles, cada uno una pregunta cerrada a Prometheus. Los paneles con
+   leccion asociada traen el comando exacto que la provoca y que hay que ver.
+4. **El state store**: la unica consulta que pide el usuario a proposito (`/analytics`), con las
+   ventanas que ha calculado el motor, su VWAP y su volatilidad.
+
+Los paneles del catalogo, en orden:
+
+| Panel | Que contesta | Si se rompe |
 |---|---|---|
-| **Pulse** | Ticks per second going into `market.ticks.raw` and coming out of the canonical topics, from the WebSocket **and** from Prometheus | Two lines that move together mean the normalizer keeps up. If the input rises and the output does not, it fell behind |
-| **Consumer lag** | How far behind each consumer group is | Near zero and saw-toothing is healthy. Climbing without returning means somebody cannot keep up |
-| **Partitions** | The current offset of every partition: the log moving forward | A flat line is a partition nobody writes to; a jump is a burst |
-| **Dead letters** | Offsets of the DLT and retry topics | Flat at zero is green. Every step is a message that landed in the DLT |
-| **Health** | Prometheus targets, the Kafka Streams engine per stack, under-replicated partitions | Who is alive and who only looks like it. An engine at 0 with the process still up is lesson 5 |
-| **Transactions** | Committed vs aborted transactions | **Empty on purpose**, with the backend's note: that counter does not exist in this Prometheus |
-| **Side by side** | Any of the above, with its Spring series and its Quarkus series together | The signature of the project. Same shape means the same behaviour |
+| `pulso` | cuantos ticks entran y cuantos salen por segundo | la entrada sube y la salida no: el normalizador no da abasto |
+| `lag` | cuanto le falta a cada grupo de consumidores | sube y no vuelve; un negativo pequeno es normal |
+| `particiones` | el offset de cada particion: el log avanzando | una particion plana es una particion a la que nadie escribe |
+| `descartes` | offsets de la DLT y de los topics de reintento | la DLT sube: hay mensajes que no se pudieron procesar |
+| `salud` | targets de Prometheus, motor de streams, particiones infrarreplicadas | un motor a 0 con el proceso vivo es la leccion 5 |
+| `transacciones` | **nada, a proposito**: esa metrica no existe en este Prometheus | si algun dia trae series, el backend cambio |
+| `comparativa` | el mismo panel en los dos stacks, a la vez | una sola linea, o una que se separa del otro stack |
 
-Every panel carries a plain-language sentence of *what you are seeing* and *why it matters*: this is
-meant to be teaching material, not another Grafana board.
+### Las lecciones
 
-The stack selector has **three** positions: Spring, Quarkus, and **Spring + Quarkus** (two columns,
-the same data on both sides). The **Side by side panel** dropdown chooses which panel to compare
-(`comparativa&de=<panel>`).
-
-### 2. Lesson mode
-
-The five lessons shipped with the backend, each with the **exact command to copy**, which panel to
-watch, and what should change:
+Vienen del repositorio del backend y se lanzan **desde una terminal del devcontainer**, nunca desde
+esta pagina. La pagina solo observa y explica; donde hay leccion, el panel trae el comando:
 
 ```bash
-bash scripts/leccion-1-broker-caido.sh
-bash scripts/leccion-2-veneno-dlt.sh
+bash scripts/leccion-1-broker-caido.sh      # el lag NO se mueve: lo que cambia esta en salud y descartes
+bash scripts/leccion-2-veneno-dlt.sh        # escalon en la DLT y el resto del pipeline sigue
 bash scripts/leccion-3-rebalanceo.sh
 bash scripts/leccion-4-exactly-once.sh
-bash scripts/leccion-5-streams-muerto.sh
+bash scripts/leccion-5-streams-muerto.sh    # el proceso sigue vivo y el motor se va a 0
 ```
-
-They run **from a terminal inside the devcontainer**, never from this page. The page only observes
-and narrates, and it says so on screen. Clicking a lesson highlights the panel it talks about.
-
-### 3. Static and publishable
-
-The app compiles to static files, so it can be served from GitHub Pages, Netlify or Vercel. See
-[Publishing](#publishing).
 
 ---
 
-## Running it
+## Como se ejecuta
 
-The backend must be up (it runs in a devcontainer with its ports forwarded to the host, so the
-browser sees `localhost`). Nothing needs to be started from this repository for the backend to work.
+El backend tiene que estar levantado (Spring en 8089/8085/8080 y Quarkus en 8189/8185). Nada de este
+repositorio hace falta para que el backend funcione.
 
 ```bash
 npm install
-npm start          # ng serve on http://localhost:4200
+npm run build
+npm run serve:built        # sirve el build y hace de proxy en http://localhost:4300
 ```
 
-CORS on the backend already allows `http://localhost:4200`, so no proxy or extra configuration is
-needed in development.
+`serve:built` sirve los ficheros compilados y hace de proxy hacia los servicios, **todo en un solo
+origen**: la app habla con su propio host y el puente decide a que servicio va cada prefijo.
 
-### Adresses
+```
+/api        -> Spring   8089        /ws    -> WebSocket de Spring 8089
+/q/api      -> Quarkus  8189        /q/ws  -> WebSocket de Quarkus 8189
+/analytics  -> Spring   8085        (el state store)
+/actuator   -> simulador 8080
+```
 
-Everything lives in one place: [`src/environments/environment.ts`](src/environments/environment.ts).
+En desarrollo tambien vale `npm start` (Angular dev server con `proxy.conf.json`), pero el camino
+probado es el build compilado: es lo que se publica.
 
-| What | Spring | Quarkus |
-|---|---|---|
-| Live events (WebSocket) | `ws://localhost:8089/ws` | `ws://localhost:8189/ws` |
-| Metrics catalog | `http://localhost:8089/api/metrics?panel=<name>` | `http://localhost:8189/api/metrics?panel=<name>` |
-| Interactive query | `http://localhost:8085/analytics?symbol=&minutes=` | `http://localhost:8185/analytics?symbol=&minutes=` |
-| Health probe | `http://localhost:8080/actuator/health` | `http://localhost:8189/q/health` |
+### Parametros de la URL
 
-Panels are polled every **5 s** in development and **10 s** in production (`metricsIntervalMs`), not
-every second: the metrics catalog is a Prometheus proxy and there is no reason to hammer it. The
-WebSocket is the per-second channel.
+| Parametro | Que hace |
+|---|---|
+| `?explicar=0` | pliega las explicaciones y deja solo los datos |
 
 ---
 
-## How it is built
+## Como se comprueba que funciona
+
+```bash
+npm test              # specs (Karma + Edge de Windows)
+npm run verify:live   # la app en un navegador de verdad, contra el backend vivo
+npm run diag:browser  # consola, red y recarga de un navegador real, desde WSL
+```
+
+`verify:live` hace **31 comprobaciones** sobre la pagina pintada — que los paneles traigan datos,
+que el panel vacio se explique, que el WebSocket entregue, que las graficas se dibujen, que cada
+panel traiga su explicacion — y las repite **despues de recargar**, porque recargar fue el sintoma
+que se llevo por delante una version entera de esta pagina.
+
+`diag:browser` es la herramienta de investigacion: sirve el build, lanza el navegador de Windows,
+pone su puerto de depuracion al alcance de WSL (un rele TCP, porque WSL2 solo reenvia `localhost` en
+un sentido), navega, imprime cada linea de consola y cada respuesta HTTP, y **recarga** la misma
+pestana para volver a medir. Sale asi:
+
+```
+[ 3497 ms] sonda "fresca 3s": respondio en 1 ms
+[ 12591 ms] sonda "reload 6s": respondio en 1 ms
+[diag] el puente registro 64 peticiones y 64 respuestas 200
+```
+
+**Aviso aprendido a golpes:** no saques conclusiones de un `--dump-dom`. Devuelve la pagina cuando
+el navegador cree que ya cargo, que en esta app es antes de que los paneles traigan nada, y da
+resultados distintos en ejecuciones seguidas. Para eso estan `verify:live` y `diag:browser`.
+
+---
+
+## Como esta construido
+
+Angular 20 sin zone.js (señales), sin libreria de graficas y sin dependencias de mas. Todo el
+codigo de la app son doce ficheros:
 
 ```
 src/app/
   core/
-    contract.ts              types for the whole contract (the 3 WebSocket messages, the panels)
-    contract.parser.ts       defensive parsing: never throws, always says which field failed
-    live.service.ts          one WebSocket per stack, reconnection with backoff, 60-point window
-    metrics.service.ts       polls the 7 panels, keeps the backend's `nota` when a panel is empty
-    analytics.service.ts     the interactive /analytics query (on demand, not in a loop)
-    series-history.service.ts short history built from the instant points of the catalog
-    urls.ts                  the only place where ws:// vs wss:// is decided
-    panel-docs.ts            the "what you are seeing / why it matters" text
-    lessons.ts               the five lessons: command, panel, expectation, twist
-  charts/                    hand-written SVG line charts (no chart library, no CDN)
-  live/                      one component per panel
-  ui/                        panel card, metric list, event feed, lesson panel, analytics panel
-  verify.ts                  optional in-page verification (?verify=1)
-tools/                       serve-verify.mjs (one-origin bridge), browser-diag.mjs + cdp.mjs +
-                             tcp-relay.mjs (real browser from WSL), dump-dom.mjs, run-tests.mjs
+    types.ts        lo que manda el backend, tipado (el contrato)
+    api.ts          URLs, un GET con tiempo limite y el parseo defensivo
+    catalog.ts      el catalogo cerrado: siete nombres, sondeo en serie, ventana de las graficas
+    live.ts         un WebSocket por stack, con reintento creciente y vigilante de apertura
+    analytics.ts    la consulta al state store
+  ui/
+    docs.ts         EL CONTENIDO: que es cada panel, que es normal y que lo rompe
+    pieces.ts       la tarjeta con su explicacion, la mini-grafica y el formato
+  app.ts/html/css   la pagina: cabecera, diagrama del pipeline, paneles
 ```
 
-Angular's own tools only: **signals**, `HttpClient`, RxJS and forms. No state-management library, no
-chart library, no CDN. The charts are `polyline`s and `path`s built by hand.
+Tres decisiones que se notan:
 
-Three deliberate choices worth calling out:
-
-- **A frame that does not match the contract cannot take the page down.** `parseLiveMessage` returns
-  a described failure instead of throwing, and the page shows it. The WebSocket is a fan-out with no
-  replay: the next snapshot fixes the gap.
-- **Nothing is ever filled in.** If the catalog returns `series: []`, the panel says "no data" and
-  repeats the backend's note. No empty charts, no invented numbers.
-- **`wss://` is chosen, not written.** `wsBase()` reads the page protocol, because an `https://` page
-  cannot open a `ws://` socket. With an empty base it also uses the page's own host, so publishing
-  behind a tunnel needs no rebuild.
+- **El catalogo es cerrado y se respeta.** El panel es la unica entrada; aqui no se construye
+  ninguna consulta. Donde el contrato no llega, la pagina no inventa: dice que no hay dato.
+- **Nada espera para siempre.** Cada peticion tiene 10 s de tiempo limite y cada WebSocket un
+  vigilante de apertura de 8 s. Una pagina en "cargando" para siempre no distingue "va lento" de "no
+  hay nadie", que es justo lo que hay que saber.
+- **La explicacion vive en `ui/docs.ts`, separada del dibujo.** Es el material que hay que revisar
+  cuando el backend cambie de comportamiento, y no esta atado a ninguna plantilla.
 
 ---
 
-## Tests
+## Publicar
 
-```bash
-npm test                      # ng test --watch=false (Karma + headless Chrome)
-```
+`npm run build` deja los estaticos en `dist/aggora-dashboard/browser`. Se pueden subir a cualquier
+hosting estatico, pero **el gateway tiene que estar en el mismo origen** que la pagina (un tunel o un
+reverse proxy delante de los dos) o hay que cambiar las rutas de `core/types.ts` por URLs absolutas y
+anadir el origen a la allowlist de CORS del backend.
 
-The suite covers the parts where a mistake would be invisible until production:
+Dos cosas que no se resuelven desde este repositorio:
 
-- contract parsing: valid messages, and the invalid ones (missing `ticksIn`, `price` as a number,
-  unknown `kind`/`stack`/`severity`, non-JSON frames) which must **fail gracefully**;
-- the metrics catalog: a panel with `series: []` plus a `nota` is *empty*, not an error; a 502 or a
-  dead gateway is an *error* with the URL in the message; the app warns when the backend breaks its
-  own promise (series and note at once, or empty with no note);
-- the WebSocket service: the moving window is capped, invalid frames do not enter it, alerts and
-  positions accumulate immediately, the socket is closed on `stop()`;
-- the series history: the moving window is capped at 60 points, repeated values are not stored, and
-  **the effect that fills it runs exactly once per metrics change** — the spec for that last point
-  fails if the effect is ever made to read the signal it writes, which is the bug that once blocked
-  the page (see [HANDOFF.md](HANDOFF.md));
-- the URL helpers: `http → ws`, `https → wss`, empty base = page host;
-- the shell: it renders, and it boots with the **real** `appConfig` (so a missing provider fails the
-  test instead of silently producing a black page).
+- **HTTPS obliga a `wss://`.** No hay que escribir el esquema en ningun sitio: lo elige `socketUrl()`
+  mirando el protocolo de la pagina. Lo que hace falta es TLS delante del gateway.
+- **CORS no es autenticacion.** `curl` lee todos los endpoints. Antes de publicar de verdad hace
+  falta autenticacion en el borde.
 
-### The HTTP layer is `fetch`, not `HttpClient`
-
-There is a small client in `core/http.ts` built on `fetch`, and the reason is measured, not
-stylistic. In this environment Angular's `HttpClient` requests never settled: the panels stayed
-on `loading` for ever, while the same requests made with `fetch` answered in ~150 ms. The
-comparison was run inside the app itself, one call after the other:
-
-```
-fetch en la app: HTTP 200, 281 B en 154 ms      <- works
-HttpClient en la app: (never answers)           <- does not
-```
-
-The network, the gateway and the WebSocket were all fine at the time (the raw probe in the
-page measures 200s and an open socket in ~250 ms), so the client layer was the only suspect
-left. `app.config.ts` still registers `provideHttpClient(withFetch())`, but nothing in the app
-injects `HttpClient` any more: it is only there so a future component that reaches for it does not
-fail at bootstrap. **This was not the cause of the panel hang** — that was the effect loop documented
-in [HANDOFF.md](HANDOFF.md), and it survived this change, which is why this paragraph is history
-rather than an explanation.
-
-What the client gives the app, and why it is worth having even without that bug:
-
-- **A timeout on every request**, with `AbortController`, so the house rule holds at the source:
-  no panel waits for ever.
-- **Errors that name the endpoint**, distinguishing a timeout from an HTTP error, and keeping
-  the closed catalog's `{error, detalle}` message.
-- No automatic JSON parsing: the contract parser is already defensive and lives in
-  `contract.parser.ts`.
-
-### Nothing waits for ever
-
-A dashboard that sits on a spinner cannot tell "the backend is slow" from "the backend is
-gone", and that difference is half the job. So every waiting state has a limit:
-
-- **Each metrics request has a timeout** (10 s). Past it, the panel switches to an error and
-  says which endpoint it called, so the failure can be checked without guessing.
-- **Each WebSocket has a handshake watchdog** (8 s). A socket that never opens is closed and
-  retried with the same increasing backoff; `connecting` is never a permanent state.
-- **A hung poll cycle is discarded**, not left holding the lock. Otherwise one stuck cycle
-  would silence every later one and the page would go quiet for ever.
-- **Every error message carries the URL.** "HTTP 502 in /api/metrics?panel=salud" is
-  actionable; "something failed" is not.
-- **A panel that is still waiting past the timeout says `still waiting`**, not `loading`.
-
-The tests cover the timeout path, the stale-cycle path and the URL in the error text, because
-these are the behaviours that turn a hang into a diagnosis.
-
-### On this machine (WSL + the Windows browser)
-
-There is no browser inside WSL. `karma.conf.js` finds the Windows browser (Edge, or Chrome if it is
-installed) through WSL interop and launches it through [`tools/chrome-wsl.sh`](tools/chrome-wsl.sh),
-which translates the Linux `--user-data-dir=/tmp/...` argument into a Windows path. Without that
-translation the browser starts and dies with exit code 21, and Karma can only report "Cannot start
-ChromeHeadless".
-
-```bash
-npm test                                  # uses the wrapper automatically
-CHROME_BIN=/usr/bin/google-chrome npm test  # native Linux Chrome, if you have one
-```
-
-### Live check
-
-With the backend and `npm start` running:
-
-```bash
-npm run verify:live                       # checks the app as rendered against the live backend
-```
-
-It opens the app in headless Chrome, reads the painted DOM and checks that the app booted, that the
-WebSocket is delivering messages and snapshots, that the metrics catalog answered, that the three
-stack positions are there, that the lesson commands are on screen and that the empty panel explains
-itself. It exits non-zero if anything is off.
-
-For a **full per-check report** there is an in-page verification mode, `?verify=1`, which runs the
-same checks from inside the page and prints a PASS/FAIL list. `tools/live-check.ps1` drives it from
-the Windows side (that is where the browser's debug port is reachable); the report is also readable
-by hand in the page.
-
-### Diagnosing a page that does not load data
-
-When the symptom is "the panels stay on `loading`", the only thing that separates *the response
-never arrives* from *the response arrives and the page does not process it* is the browser console
-and the Network tab. `npm run diag:browser` gets both from WSL in one command:
-
-```bash
-npm run build
-npm run diag:browser                      # serves the build, launches Edge, navigates, reloads, reports
-node tools/browser-diag.mjs --fase=15000 --url=http://localhost:4300/?diag=1
-```
-
-It prints the app's own `?diag=1` report every 3 s, every `[aggora]` console line, every HTTP
-response and every network failure — for a **fresh session and for a reload** of the same tab. That
-is how the effect-loop bug documented in [HANDOFF.md](HANDOFF.md) was found.
-
-Two in-page switches help isolate a fault without touching code:
-
-| switch | what it does |
-|---|---|
-| `?solo=live\|metrics\|analytics` | starts a single service, so a hang can be blamed on one of them |
-| `?nodiag=1` | turns the diagnostics repaint off |
-
-A warning learned the hard way: **do not draw conclusions from a single `--dump-dom` run.** It
-samples the page at an arbitrary moment and answers differently on consecutive runs.
+Aviso de tamano: servir los dos stacks es pesado. Si el host es pequeno, publica uno y apaga el
+otro; la columna del que falte dara error de red, que es informacion y no una pagina rota.
 
 ---
 
-## Publishing
+## Lo que esta pagina no puede decir
 
-`npm run build` writes static files to `dist/aggora-dashboard/browser`. Upload that folder to GitHub
-Pages, Netlify, Vercel or any static host.
-
-### The one thing that matters: `https://` forces `wss://`
-
-A page served over HTTPS **cannot** open a `ws://` socket; the browser blocks it as mixed content.
-This app already handles it: `wsBase()` picks the scheme from `location.protocol`, so the same build
-works locally (`ws://`) and behind TLS (`wss://`). You do not need to write the scheme anywhere.
-
-What you do need is **TLS in front of the gateway** — a tunnel (Cloudflare Tunnel) or a reverse proxy
-(Caddy, nginx). Both gateways honour `X-Forwarded-*`, so they behave correctly behind one. The
-backend documentation covers the two setups in `docs/dashboard.md`, section 6.
-
-### Pointing the build at your backend
-
-Edit [`src/environments/environment.production.ts`](src/environments/environment.production.ts):
-
-- **Same domain for the app and the gateway** (the usual tunnel/reverse-proxy setup): leave the bases
-  as empty strings. The app will use the page's own host for HTTP and WebSocket, so the bundle does
-  not hardcode a domain. `/api/metrics` and `/ws` must reach the gateway from that host.
-- **Different hosts**: put the full URLs in, e.g. `gateway: 'https://aggora.midominio.com'` and
-  `analytics: 'https://aggora-analytics.midominio.com'`.
-
-Two more things have to be true on the backend side, and neither is done from this repository:
-
-1. **Add the public origin to the CORS allowlist.** Spring:
-   `aggora.ui.allowed-origins` (comma-separated). Quarkus: `quarkus.http.cors.enabled=true` plus
-   `quarkus.http.cors.origins`, or `QUARKUS_HTTP_CORS_ORIGINS`. No `*`: that would let anyone read
-   the data. (In Quarkus 3.39.3 the old `quarkus.http.cors=true` is not recognised and CORS is
-   silently not applied.)
-2. **Publish only the thin edge.** What the dashboard needs is the two gateways (WebSocket + metrics
-   catalog) and, at most, the analytics reader. Kafka, Prometheus, Grafana, Postgres and the workers
-   stay inside.
-
-### Two honest warnings
-
-- **CORS is enforced by the browser, not by the server.** The allowlist is not authentication:
-  `curl` still reads the endpoints. Before publishing for real you want authentication at the edge
-  (Cloudflare Access, Caddy `basic_auth`, or whatever proxy you use). There is none today.
-- **Serving both stacks is heavy.** If the host is small, publish **one** gateway and turn the other
-  stack off. The dashboard's "Spring + Quarkus" column will show a network error for the stack that
-  is not published — which is information, not a broken page.
-
----
-
-## What this dashboard cannot say
-
-- It is not the source of truth. The truth is in Kafka (the topics) and Prometheus (the series). If
-  the gateway dies there is no dashboard, but the pipeline keeps running.
-- It writes nothing. Every endpoint is read-only.
-- It cannot reconstruct the past. The `snapshot` is the **last** value per symbol, not a history, and
-  the WebSocket is a fan-out: a slow client misses messages and recovers with the next snapshot. For
-  history you ask Prometheus, which already keeps it.
-- It cannot promise exactly-once on screen. That belongs to the matching engine and Kafka. The
-  `transacciones` panel is empty because the metric does not exist, and it says so.
-- It has no authentication. See the warning above.
-
----
-
-## Verified against the live backend
-
-Checked with both stacks running (Spring on 8089/8085, Quarkus on 8189/8185), the app served by the
-compiled build on `http://localhost:4300` and a **real browser** driven from WSL:
-
-- `ng build` green; `npm test` green (**76 specs**).
-- The app renders with the real backend; the live panels request and receive the catalog for both
-  stacks, and `GET /analytics` answers the interactive query.
-- Fresh session: **12 panels `ok`, 2 `empty`** (`transacciones` on purpose), both sockets `open`, the
-  page clock ticking once per second.
-- **Reloading the page behaves exactly like a fresh session.** This used to be the unsolved symptom;
-  the cause and the evidence are in [HANDOFF.md](HANDOFF.md).
-
-Live backend answers that differ from the contract text, recorded rather than hidden:
-
-- `GET /analytics` returns a **bare JSON array** of windows (`symbol`, `currency`, `windowKind`,
-  `windowStart`, `windowEnd`, `ticks`, `volume`, `vwap`, `movingAverage`, `volatility`,
-  `lastPrice`). The contract lists the URL but not this shape; the parser accepts the array (and an
-  object with `windows`, by tolerance).
-- `comparativa&de=particiones` labels are `spring/market.ticks.canonical` — **aggregated, with no
-  partition number** — while the plain `particiones` panel is `topic/partition`. The side-by-side
-  comparison is therefore not partition-aligned, and the UI says so.
-- `comparativa&de=salud` currently returns only `spring/analytics-streams`; there is no
-  `quarkus/...` counterpart, so that comparison has one side. The UI says so.
-- `lag` can return a **negative** value (e.g. `analytics-streams` at `-3`). It is shown as-is and not
-  treated as an error.
-- `salud` returns ~85 series, most of them `under-replicated/prueba.*` leftovers at 0. Those are
-  collapsed into a count and only the topics above 0 are listed, so the signal is not buried.
-
-The end-to-end checks are `npm run verify:live` and the in-page `?verify=1` report, plus
-`npm run diag:browser`, which drives the Windows browser from WSL over the debugging protocol
-(`tools/cdp.mjs` + `tools/tcp-relay.mjs`) and reads the console and the network directly. All of them
-are in this repository.
+- No es la fuente de la verdad. Si el gateway se cae, no hay dashboard, pero el pipeline sigue.
+- No reconstruye el pasado: la foto del WebSocket es el **ultimo** valor por simbolo y no hay
+  reenvio. Un cliente lento se pierde un segundo y se corrige con el siguiente.
+- No promete exactly-once en pantalla: eso es del motor y de Kafka, y el panel de transacciones esta
+  vacio porque la metrica no existe, no porque falte.

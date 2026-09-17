@@ -1,3 +1,12 @@
+/**
+ * La pagina. Todo lo que se ve esta aqui, salvo las piezas repetidas (`ui/pieces.ts`) y el texto
+ * explicativo (`ui/docs.ts`).
+ *
+ * La idea de la que sale todo lo demas: **cada panel responde a una pregunta sobre el backend**, y
+ * al lado del dato esta la explicacion de que se esta viendo y que significa que se rompa. Los
+ * numeros son la evidencia; el texto es el producto.
+ */
+
 import {
   ChangeDetectionStrategy,
   Component,
@@ -6,481 +15,405 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import {
-  COMPARABLE_PANELS,
-  ComparablePanel,
-  PanelName,
-  STACKS,
-  Stack,
-  StackMode,
-} from './core/contract';
-import { LiveService } from './core/live.service';
-import { MetricsService } from './core/metrics.service';
-import { AnalyticsService } from './core/analytics.service';
-import { environment } from '../environments/environment';
-import { PANEL_DOCS, SERIES_PALETTE } from './core/panel-docs';
-import { PanelCard } from './ui/panel-card';
-import { MetricList } from './ui/metric-list';
-import { PulsePanel } from './live/pulse-panel';
-import { LagPanel } from './live/lag-panel';
-import { PartitionsPanel } from './live/partitions-panel';
-import { DeadLettersPanel } from './live/dead-letters-panel';
-import { HealthPanel } from './live/health-panel';
-import { TransactionsPanel } from './live/transactions-panel';
-import { LiveEventsPanel } from './live/live-events-panel';
-import { AnalyticsPanel } from './ui/analytics-panel';
-import { LessonsPanel } from './ui/lessons-panel';
-import { Verify } from './verify';
-import { MetricRow, formatAge, formatInteger } from './ui/format';
-import { lastValue } from './core/contract.parser';
-import { wsUrl } from './core/urls';
+import { Catalog, PanelName, COMPARABLES } from './core/catalog';
+import { LiveFeed } from './core/live';
+import { Analytics } from './core/analytics';
+import { PanelData, Series, STACK_LABEL, STACKS, Stack, View, find, value } from './core/types';
+import { Card, Spark, corto, entero, hace, numero } from './ui/pieces';
+import { COMPARISON, DOCS } from './ui/docs';
 
-/** Los paneles de metricas con su forma de pintarse. */
-type PanelView = 'pulse' | 'lag' | 'series' | 'health' | 'transactions';
-
-interface PanelSlot {
-  readonly panel: PanelName;
-  readonly view: PanelView;
+/** Un stack en pantalla: el que se esta mirando, o los dos en el modo lado a lado. */
+interface Column {
+  readonly stack: Stack;
+  readonly label: string;
 }
 
-/**
- * Los paneles del catalogo, en el orden en que se leen: del latido a la letra pequena.
- *
- * `comparativa` no esta en esta lista y no es un olvido: no es un panel mas, es **el modo** en que
- * se pinta cualquier otro panel (selector "Side by side"), y por eso vive en la barra de arriba.
- */
-const SLOTS: readonly PanelSlot[] = [
-  { panel: 'pulso', view: 'pulse' },
-  { panel: 'lag', view: 'lag' },
-  { panel: 'particiones', view: 'series' },
-  { panel: 'descartes', view: 'series' },
-  { panel: 'salud', view: 'health' },
-  { panel: 'transacciones', view: 'transactions' },
-];
+/** Una fila de una lista de metricas. */
+interface Row {
+  readonly label: string;
+  readonly valor: number | null;
+  readonly tone: 'ok' | 'aviso' | 'roto' | 'tenue';
+  readonly hint?: string;
+}
 
-/**
- * El dashboard: de solo lectura, con selector de stack y modo leccion.
- *
- * Tres decisiones que se notan en la pantalla:
- *
- *  1. **El selector tiene tres posiciones**, no dos: Spring, Quarkus y *both*. El modo lado a lado es
- *     la firma del proyecto (el mismo pipeline implementado dos veces), asi que es una posicion de
- *     primera clase y no un extra escondido.
- *  2. **Cada panel dice que estas viendo y por que importa.** Es material de aprendizaje, no un
- *     Grafana con otro color.
- *  3. **Nada se rellena.** Un panel sin serie dice "no data" y repite la nota del backend; un error
- *     de red se ensena como error, con la URL que fallo.
- */
+/** Un grupo del panel de salud. */
+interface HealthGroup {
+  readonly key: string;
+  readonly title: string;
+  readonly items: readonly Row[];
+  readonly cuenta: string;
+}
+
 @Component({
-  selector: 'app-root',
+  selector: 'aggora-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    PanelCard,
-    MetricList,
-    PulsePanel,
-    LagPanel,
-    PartitionsPanel,
-    DeadLettersPanel,
-    HealthPanel,
-    TransactionsPanel,
-    LiveEventsPanel,
-    AnalyticsPanel,
-    LessonsPanel,
-    Verify,
-  ],
+  imports: [Card, Spark],
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
 export class App implements OnDestroy {
-  protected readonly live = inject(LiveService);
-  protected readonly metrics = inject(MetricsService);
-  protected readonly analytics = inject(AnalyticsService);
+  private readonly catalog = inject(Catalog);
+  private readonly live = inject(LiveFeed);
+  private readonly analytics = inject(Analytics);
 
-  protected readonly stacks = STACKS;
-  protected readonly slots = SLOTS;
-  protected readonly docs = PANEL_DOCS;
-  protected readonly comparablePanels = COMPARABLE_PANELS;
-  protected readonly mode = signal<StackMode>('spring');
-  /** Panel resaltado desde el modo leccion. */
-  protected readonly highlighted = signal<PanelName | null>(null);
+  /** Lo que elige el usuario. */
+  protected readonly view = signal<View>('spring');
+  protected readonly comparado = this.catalog.comparado;
+  protected readonly comparables = COMPARABLES;
+  protected readonly docs = DOCS;
+  protected readonly comparison = COMPARISON;
+  protected readonly simbolo = signal('EUR/USD');
+  protected readonly minutos = signal(3);
 
-  protected readonly intervalSeconds = Math.round(environment.metricsIntervalMs / 1000);
-  protected readonly windowSeconds = environment.tickWindow;
-
-  /**
-   * Reloj de la pantalla: se repinta una vez por segundo para que "hace 3 s" no se quede congelado.
-   * Es una signal, no una llamada a `Date.now()` en la plantilla, para no cambiar valores a mitad de
-   * ciclo de deteccion.
-   */
+  /** Reloj de la pantalla: las edades ("hace 3 s") se repintan sin volver a pedir nada. */
   private readonly reloj = signal(Date.now());
-  readonly now = this.reloj.asReadonly();
+  private readonly latido = setInterval(() => this.reloj.set(Date.now()), 1000);
+  protected readonly ahora = this.reloj.asReadonly();
 
-  /**
-   * El informe de diagnostico, ya compuesto como texto.
-   *
-   * **Se calcula desde el reloj y se pinta con una interpolacion de la plantilla, no escribiendo el
-   * DOM a mano.** Ese cambio es el arreglo de un fallo real de esta pagina: antes el informe se
-   * reescribia dentro de `ngAfterViewChecked`, y en esta version de Angular ese hook puede no
-   * ejecutarse aunque la vista se siga refrescando (medido: el reloj de la pantalla avanzaba y el
-   * contador de `ngDoCheck` se quedaba en 2). Resultado: con `?diag=1` el informe se quedaba
-   * congelado en el estado del arranque y parecia que la app no volvia a pedir nada.
-   */
-  protected readonly informeDiag = signal('');
+  /** La explicacion de cada panel se puede plegar con `?explicar=0`. */
+  protected readonly explicar =
+    typeof location === 'undefined' || new URLSearchParams(location.search).get('explicar') !== '0';
 
-  /**
-   * Cuantas veces por segundo late el reloj: si esto se dispara, la deteccion de cambios esta en
-   * bucle y el hilo principal no tiene turno para nada mas.
-   */
-  protected readonly latidosPorSegundo = signal(0);
-
-  private readonly latido = setInterval(() => {
-    const ahora = Date.now();
-    this.reloj.set(ahora);
-    this.contarLatido(ahora);
-    if (this.modoDiag && !this.sinDiag) {
-      this.informeDiag.set(this.componerInforme());
-    }
-  }, 1000);
-
-  /** Ventana del latido: sirve para detectar un bucle de deteccion. */
-  private inicioVentana = Date.now();
-  private latidosEnVentana = 0;
-  /** Bucle de deteccion de cambios detectado: solo puede ser un bug de la app. */
-  readonly bucleDetectado = signal(false);
-
-  private contarLatido(ahora: number): void {
-    this.latidosEnVentana += 1;
-    if (ahora - this.inicioVentana >= 1000) {
-      this.latidosPorSegundo.set(this.latidosEnVentana);
-      if (this.latidosEnVentana > 200 && !this.bucleDetectado()) {
-        this.bucleDetectado.set(true);
-      }
-      this.latidosEnVentana = 0;
-      this.inicioVentana = ahora;
-    }
-  }
-
-  /**
-   * Compone el informe: estados de los paneles, sockets, sonda cruda de red y las metricas del
-   * navegador. Todo lo que hace falta para saber si la pagina esta viva sin abrir la consola.
-   */
-  private componerInforme(): string {
-    const paneles = Object.values(this.metrics.panels());
-    const porEstado: Record<string, number> = {};
-    for (const panel of paneles) {
-      porEstado[panel.status] = (porEstado[panel.status] ?? 0) + 1;
-    }
-    return [
-      `latidos del reloj: ${this.latidosPorSegundo()} por segundo${this.bucleDetectado() ? '  *** BUCLE DE DETECCION ***' : ''}`,
-      `panels: ${JSON.stringify(porEstado)}`,
-      `ciclos de paneles descartados por colgarse: ${this.metrics.descartados}`,
-      `socket spring: ${this.live.live().spring.state} | quarkus: ${this.live.live().quarkus.state}`,
-      `messages parsed: ${this.live.messageCount()}`,
-      `backend from the browser: ${this.backendReachable()}`,
-      '--- sonda cruda (antes de Angular) ---',
-      ...this.lineasSonda(),
-      ...this.notasDiag,
-    ].join('\n');
-  }
-
-  /** Si el navegador puede hablar con el gateway, medido desde el propio navegador. */
-  private readonly backendReachable = signal<string>('not measured');
-
-  /**
-   * Mide si el navegador alcanza el gateway, que NO es lo mismo que si lo alcanza la terminal.
-   *
-   * Este es el diagnostico que faltaba: cuando la pagina vive en un sitio y el backend en otro
-   * (aqui: la app la sirve WSL y el navegador es el de Windows), la red del navegador puede no ver
-   * `localhost:8089` aunque `curl` si lo vea. Se mide con una peticion de verdad y con tiempo limite.
-   */
-  async medirBackend(): Promise<void> {
-    // Primero una URL del mismo origen (sirve el propio dev server): sirve de control para saber si
-    // el problema es la red del navegador o solo el salto a otro puerto.
-    const urls = [location.origin + '/favicon.ico', this.origen('pulso', 'spring')];
-    for (const url of urls) {
-      const inicio = Date.now();
-      try {
-        const control = new AbortController();
-        const limite = setTimeout(() => control.abort(), 4000);
-        const respuesta = await fetch(url, { signal: control.signal });
-        clearTimeout(limite);
-        // Se lee el cuerpo: si el cuerpo no llega, la peticion no sirve de nada.
-        const texto = await respuesta.text();
-        this.backendReachable.set(`${url} -> HTTP ${respuesta.status}, ${texto.length} B en ${Date.now() - inicio} ms`);
-        return;
-      } catch (error) {
-        this.backendReachable.set(`${url} -> FALLO en ${Date.now() - inicio} ms: ${String(error)}`);
-      }
-    }
-  }
-
-  /** Lineas que midio la sonda cruda de `index.html`, si ya termino. */
-  private lineasSonda(): readonly string[] {
-    const sonda = (globalThis as { __aggoraProbe?: { lines: string[]; listo: boolean } }).__aggoraProbe;
-    if (!sonda) {
-      return ['(la sonda no existe: index.html no la ejecuto)'];
-    }
-    return [...sonda.lines, sonda.listo ? '(sonda terminada)' : '(sonda en curso)'];
-  }
-
-  /** Lineas que los servicios quieren anadir al informe de diagnostico. */
-  private readonly notasDiag: string[] = [];
-
-  /** Permite anotar lineas en el informe de diagnostico desde los servicios. */
-  anotarDiag(linea: string): void {
-    this.notasDiag.push(linea);
-  }
-
-  constructor() {
-    traza('App: constructor inicio');
-    /*
-     * Interruptores de diagnostico, los dos que de verdad sirven para aislar un fallo sin recom
-     * pilar:
-     *
-     *   `?solo=live|metrics|analytics`  arranca un unico servicio (los otros no se tocan).
-     *   `?nodiag=1`                     apaga el repintado del informe de diagnostico.
-     *
-     * Nacieron del fallo de este repositorio: la pagina se quedaba en `loading` con el renderer
-     * bloqueado, y con la app entera no habia forma de saber que pieza lo colgaba.
-     */
-    const solo = new URLSearchParams(location.search).get('solo');
-    const sinDiag = new URLSearchParams(location.search).has('nodiag');
-    const arranca = (nombre: 'live' | 'metrics' | 'analytics'): boolean => !solo || solo === nombre;
-    this.solo = solo;
-    this.sinDiag = sinDiag;
-    traza(`App: interruptores solo=${solo ?? '(ninguno)'} nodiag=${sinDiag}`);
-    void this.medirBackend();
-    traza('App: medirBackend lanzado');
-    if (arranca('live')) {
-      this.live.start();
-      traza('App: live.start hecho');
-    } else {
-      traza('App: live.start OMITIDO por ?solo=');
-    }
-    if (arranca('metrics')) {
-      this.metrics.start();
-      traza('App: metrics.start hecho');
-    } else {
-      traza('App: metrics.start OMITIDO por ?solo=');
-    }
-    if (arranca('analytics')) {
-      void this.analytics.query(
-        environment.defaultAnalyticsSymbol,
-        environment.defaultAnalyticsMinutes,
-      );
-      traza('App: analytics.query lanzado');
-    } else {
-      traza('App: analytics.query OMITIDO por ?solo=');
-    }
-  }
-
-  /** Diagnostico: que servicio se esta ejecutando (`?solo=<nombre>`), si se pidio. */
-  private solo: string | null = null;
-  /** Diagnostico: apaga el repintado del informe en cada ciclo de deteccion. */
-  private sinDiag = false;
-
-  ngOnDestroy(): void {
-    // El root no se destruye en produccion, pero en los tests si: sin esto, el intervalo se queda
-    // vivo y Karma avisa de que no termina.
-    clearInterval(this.latido);
-    this.live.stop();
-    this.metrics.stop();
-  }
-
-  /** Los stacks visibles segun el selector. */
-  readonly visibles = computed<readonly Stack[]>(() => {
-    const modo = this.mode();
-    return modo === 'both' ? STACKS : [modo];
+  /** Las columnas visibles: una sola, o las dos para comparar. */
+  protected readonly columnas = computed<readonly Column[]>(() => {
+    const modo = this.view();
+    const stacks = modo === 'both' ? STACKS : [modo];
+    return stacks.map((stack) => ({ stack, label: STACK_LABEL[stack] }));
   });
 
-  readonly ambos = computed(() => this.mode() === 'both');
+  protected readonly ambos = computed(() => this.view() === 'both');
 
-  /** Filas de la vista de particiones: todas las series, ordenadas por topic. */
-  filasParticiones(stack: Stack): readonly MetricRow[] {
-    const series = this.metrics.panel('particiones', stack).data?.series ?? [];
-    return [...series]
-      .sort((a, b) => a.label.localeCompare(b.label))
-      .map((serie, indice) => ({
-        label: serie.label,
-        value: lastValue(serie),
-        color: SERIES_PALETTE[indice % SERIES_PALETTE.length],
-        tone: 'ok' as const,
-      }));
+  /**
+   * El diagrama del pipeline: cinco cajas que se encienden segun lo que dice el catalogo.
+   *
+   * Es la parte que contesta "que esta haciendo el backend ahora mismo" de un vistazo. El color no es
+   * decoracion: cada caja mira el dato que le corresponde y se pone en rojo sola.
+   */
+  protected readonly etapas = computed(() => {
+    const stack: Stack = this.view() === 'quarkus' ? 'quarkus' : 'spring';
+    const pulso = this.series('pulso', stack);
+    const entrando = value(find(pulso, 'entrada'));
+    const saliendo = value(find(pulso, stack === 'quarkus' ? 'salida-quarkus' : 'salida-spring'));
+    const lagMaximo = Math.max(
+      0,
+      ...this.series('lag', stack).map((serie) => value(serie) ?? 0),
+    );
+    const descartes = this.series('descartes', stack).reduce(
+      (suma, serie) => suma + (value(serie) ?? 0),
+      0,
+    );
+    const salud = this.series('salud', stack);
+    const motor = salud.find((serie) => serie.label.startsWith(stack));
+    const motorCaido = motor ? (value(motor) ?? 1) < 1 : false;
+    const infrarreplicadas = salud.filter(
+      (serie) => serie.label.startsWith('under-replicated/') && (value(serie) ?? 0) > 0,
+    ).length;
+    const socket = this.live.state()[stack].state;
+    const aviso = 'aviso' as const;
+    return [
+      {
+        key: 'simulador',
+        icono: '📈',
+        nombre: 'Simulador de mercado',
+        que: 'Genera ticks sinteticos, con precio y tamano, como si fueran de un mercado real.',
+        donde: 'el latido',
+        tone: entrando === null ? 'tenue' : entrando > 0 ? 'ok' : aviso,
+      },
+      {
+        key: 'kafka',
+        icono: '🗂️',
+        nombre: 'Kafka: market.ticks.raw',
+        que: 'Los ticks se guardan en un log particionado por donde los leen los dos stacks.',
+        donde: 'particiones',
+        tone: (entrando ?? 0) > 0 ? 'ok' : 'tenue',
+      },
+      {
+        key: 'normalizador',
+        icono: '🧮',
+        nombre: 'Normalizador',
+        que: 'Valida y convierte cada tick al formato canonico; lo que no puede procesar va a la DLT.',
+        donde: 'descartes',
+        tone: descartes > 0 ? aviso : saliendo !== null && saliendo > 0 ? 'ok' : aviso,
+      },
+      {
+        key: 'streams',
+        icono: '🌊',
+        nombre: 'Motor de streams',
+        que: 'Calcula ventanas: VWAP, media movil, volatilidad, y las deja en su state store.',
+        donde: 'salud',
+        tone: motorCaido ? 'roto' : 'ok',
+      },
+      {
+        key: 'prometheus',
+        icono: '📊',
+        nombre: 'Prometheus y gateways',
+        que: 'Recoge las metricas de todo lo anterior y las publica por HTTP y por WebSocket.',
+        donde: 'el catalogo entero',
+        tone: socket === 'abierto' ? 'ok' : aviso,
+      },
+    ];
+  });
+
+  /** El estado en vivo de un stack. */
+  protected vivo(stack: Stack) {
+    return this.live.state()[stack];
   }
 
-  /** Filas de descartes: lo que no es cero primero, y con aviso. */
-  filasDescartes(stack: Stack): readonly MetricRow[] {
-    const series = this.metrics.panel('descartes', stack).data?.series ?? [];
-    return [...series]
-      .sort((a, b) => (lastValue(b) ?? 0) - (lastValue(a) ?? 0))
-      .map((serie, indice) => {
-        const valor = lastValue(serie);
+  /** Como esta el socket de un stack, en una frase. */
+  protected estadoSocket(stack: Stack): string {
+    const estado = this.vivo(stack);
+    switch (estado.state) {
+      case 'abierto':
+        return estado.lastAt
+          ? `conectado, ultimo mensaje ${hace(estado.lastAt, this.ahora())}`
+          : 'conectado, esperando la primera foto';
+      case 'conectando':
+        return 'conectando...';
+      case 'reintentando':
+        return `reintentando (intento ${estado.intentos})`;
+      default:
+        return 'parado';
+    }
+  }
+
+  /** El estado de un panel del catalogo, en un stack. */
+  protected panel(panel: string, stack: Stack) {
+    return this.catalog.entry(panel, stack);
+  }
+
+  /** Datos de un panel, o lista vacia. */
+  private series(panel: string, stack: Stack): readonly Series[] {
+    return this.catalog.entry(panel, stack).data?.series ?? [];
+  }
+
+  protected valorDe(panel: string, stack: Stack, label: string): number | null {
+    return value(find(this.series(panel, stack), label));
+  }
+
+  /** Ventana corta guardada de una serie, para la mini-grafica. */
+  protected historia(panel: string, stack: Stack, label: string): readonly number[] {
+    return this.catalog.serie(panel, stack, label);
+  }
+
+  /* ---------------------------------------------------------------- paneles */
+
+  /** `pulso`: las tasas del catalogo, con su color fijo. */
+  protected tasasPulso(stack: Stack): readonly Row[] {
+    const colores: Record<string, string> = {
+      entrada: 'var(--bien)',
+      'salida-spring': 'var(--aviso)',
+      'salida-quarkus': 'var(--info)',
+    };
+    return this.series('pulso', stack).map((serie) => ({
+      label: serie.label,
+      valor: value(serie),
+      tone: 'ok' as const,
+      hint: colores[serie.label] ?? 'var(--info)',
+    }));
+  }
+
+  /** `lag`: un grupo de consumidores por fila. */
+  protected filasLag(stack: Stack): readonly Row[] {
+    return this.series('lag', stack).map((serie) => {
+      const dato = value(serie);
+      return {
+        label: serie.label,
+        valor: dato,
+        tone:
+          dato === null
+            ? ('tenue' as const)
+            : dato > 500
+              ? ('roto' as const)
+              : dato > 50
+                ? ('aviso' as const)
+                : ('ok' as const),
+      };
+    });
+  }
+
+  /** `particiones`: el offset de cada particion, ordenado por topic. */
+  protected filasParticiones(stack: Stack): readonly Row[] {
+    return [...this.series('particiones', stack)]
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map((serie) => ({ label: serie.label, valor: value(serie), tone: 'ok' as const }));
+  }
+
+  /** `descartes`: lo que no es cero primero, porque es lo unico que hay que mirar. */
+  protected filasDescartes(stack: Stack): readonly Row[] {
+    return [...this.series('descartes', stack)]
+      .sort((a, b) => (value(b) ?? 0) - (value(a) ?? 0))
+      .map((serie) => {
+        const dato = value(serie);
         return {
           label: serie.label,
-          value: valor,
-          color:
-            (valor ?? 0) > 0 ? '#ff6b8b' : SERIES_PALETTE[indice % SERIES_PALETTE.length],
-          tone: (valor ?? 0) > 0 ? ('warn' as const) : ('ok' as const),
+          valor: dato,
+          tone: (dato ?? 0) > 0 ? ('roto' as const) : ('tenue' as const),
           hint:
-            (valor ?? 0) > 0
-              ? 'messages parked here: read the x-dlt-reason header of each one'
+            (dato ?? 0) > 0
+              ? 'aqui si hay mensajes: el motivo viaja en la cabecera x-dlt-reason del propio mensaje'
               : undefined,
         };
       });
   }
 
-  /** Estado del panel de comparativa del stack que se esta mirando. */
-  readonly comparativa = computed(() =>
-    this.metrics.panel('comparativa', this.mode() === 'quarkus' ? 'quarkus' : 'spring'),
-  );
+  /** `salud`: las tres comprobaciones que el contrato mete en el mismo panel. */
+  protected gruposSalud(stack: Stack): readonly HealthGroup[] {
+    const series = this.series('salud', stack);
+    const esIsr = (label: string) => label.startsWith('under-replicated/');
+    const objetivo = (label: string) => !esIsr(label) && !label.includes('/');
+    const motor = (label: string) => !esIsr(label) && label.includes('/');
+    const isrCero = series.filter((serie) => esIsr(serie.label) && (value(serie) ?? 0) === 0);
+    const isrMal = series.filter((serie) => esIsr(serie.label) && (value(serie) ?? 0) > 0);
 
-  /** Filas de la comparativa: las dos series lado a lado, con color por implementacion. */
-  readonly filasComparativa = computed<readonly MetricRow[]>(() =>
-    (this.comparativa().data?.series ?? []).map((serie, indice) => ({
-      label: serie.label,
-      value: lastValue(serie),
-      color: serie.label.startsWith('quarkus')
-        ? '#5aa9ff'
-        : serie.label.startsWith('spring')
-          ? '#3ddc97'
-          : SERIES_PALETTE[indice % SERIES_PALETTE.length],
-      tone: 'ok' as const,
-    })),
-  );
-
-  protected readonly formatInteger = formatInteger;
-
-  /** Origen del dato, para la cabecera de cada tarjeta. */
-  origen(panel: PanelName, stack: Stack): string {
-    const base = environment[stack].gateway || location.origin;
-    return panel === 'comparativa'
-      ? `${base}/api/metrics?panel=comparativa&de=${this.metrics.comparisonPanel()}`
-      : `${base}/api/metrics?panel=${panel}`;
-  }
-
-  /** Nombre del stack para la UI. */
-  etiqueta(stack: Stack): string {
-    return environment[stack].label;
-  }
-
-  /** A donde apunta el socket de un stack: se ve en la pantalla sin abrir la consola. */
-  urlSocket(stack: Stack): string {
-    return wsUrl(environment[stack]);
-  }
-
-  /**
-   * Aviso de "no hay a quien preguntar".
-   *
-   * Sin esto la pagina se queda en `loading` para siempre cuando el gateway no responde, y parece
-   * que la app esta rota cuando lo que pasa es que el backend esta caido. Un panel aislado puede
-   * fallar sin ruido, pero si TODOS fallan a la vez, se dice en la cabecera.
-   */
-  readonly sinBackend = computed(() => {
-    const paneles = Object.values(this.metrics.panels());
-    const conDatos = paneles.filter((estado) => estado.status === 'ok').length;
-    const conError = paneles.filter((estado) => estado.status === 'error').length;
-    return conDatos === 0 && conError > 0;
-  });
-
-  /** Mensaje del aviso, con la URL que fallo. */
-  readonly avisoBackend = computed(() => {
-    const errores = Object.values(this.metrics.panels()).filter((estado) => estado.status === 'error');
-    const primero = errores[0];
-    const cola = primero?.note ? ` ${primero.note}` : '';
-    const otros = errores.length > 1 ? ` (+${errores.length - 1} more panels with the same problem)` : '';
-    return `No panel is answering.${cola}${otros}`;
-  });
-
-  /** Estado del WebSocket de un stack, en una frase. */
-  estadoSocket(stack: Stack): string {
-    const estado = this.live.live()[stack];
-    switch (estado.state) {
-      case 'open':
-        return estado.lastMessageAt
-          ? `live · last message ${formatAge(estado.lastMessageAt, Date.now())}`
-          : 'live, waiting for the first snapshot';
-      case 'connecting':
-        return 'connecting...';
-      case 'reconnecting':
-        return `reconnecting (attempt ${estado.reconnects})`;
-      case 'closed':
-        return 'socket closed';
-      default:
-        return 'not started';
-    }
-  }
-
-  edad(fetchedAt: number | null): string {
-    return formatAge(fetchedAt, Date.now());
-  }
-
-  cambiarModo(modo: StackMode): void {
-    this.mode.set(modo);
-    // Al cambiar de modo se repinta todo: `both` tiene el doble de tarjetas y conviene refrescar ya.
-    void this.metrics.refreshAll();
-  }
-
-  elegirComparativa(panel: ComparablePanel): void {
-    this.metrics.setComparisonPanel(panel);
-  }
-
-  /** Resalta un panel y baja hasta el (lo pide el modo leccion). */
-  resaltar(panel: PanelName): void {
-    this.highlighted.set(panel);
-    if (typeof document !== 'undefined') {
-      document.getElementById(`panel-${panel}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    setTimeout(() => this.highlighted.set(null), 2600);
-  }
-
-  readonly totalMensajes = this.live.messageCount;
-
-  /**
-   * Modo de comprobacion en vivo (`?verify=1`). Apagado por defecto: no forma parte del dashboard,
-   * es la herramienta con la que se demuestra que el dashboard funciona contra el backend de verdad
-   * (ver `src/app/verify.ts` y `npm run verify:live`).
-   */
-  readonly modoVerificacion =
-    typeof location !== 'undefined' && new URLSearchParams(location.search).has('verify');
-
-  /** Informe de diagnostico visible en la pagina (`?diag=1`). */
-  readonly modoDiag =
-    typeof location !== 'undefined' && new URLSearchParams(location.search).has('diag');
-}
-
-/**
- * Traza de arranque.
- *
- * Se apunta en `window.__aggoraTrace` en vez de en la consola porque en este equipo la consola del
- * navegador no siempre esta a mano, y el sintoma (la app pinta pero no carga datos) exige saber
- * hasta que linea del constructor se ejecuto.
- */
-function traza(paso: string): void {
-  const global = globalThis as { __aggoraTrace?: string[] };
-  global.__aggoraTrace = global.__aggoraTrace ?? ['(traza inicializada)'];
-  global.__aggoraTrace.push(`${Math.round(performance.now())} ms  ${paso}`);
-
-  // Se pinta tambien en el DOM, para que se pueda leer sin consola ni informe.
-  if (typeof document !== 'undefined') {
-    const pintar = (): void => {
-      if (!document.body) {
-        return;
-      }
-      let pre = document.getElementById('boot-trace');
-      if (!pre) {
-        pre = document.createElement('pre');
-        pre.id = 'boot-trace';
-        pre.style.cssText =
-          'margin:12px;padding:10px;border:1px solid #2d6a4f;border-radius:8px;background:#0d1a14;' +
-          'color:#b7f5d8;font:11px/1.6 monospace;white-space:pre-wrap;';
-        document.body.appendChild(pre);
-      }
-      pre.textContent = 'Boot trace\n' + global.__aggoraTrace!.join('\n');
+    const fila = (serie: Series): Row => {
+      const dato = value(serie);
+      return {
+        label: serie.label,
+        valor: dato,
+        tone: dato === null ? 'tenue' : dato >= 1 ? 'ok' : 'roto',
+      };
     };
-    if (document.body) {
-      pintar();
-    } else {
-      document.addEventListener('DOMContentLoaded', pintar, { once: true });
-    }
+    const targets = series.filter((serie) => objetivo(serie.label));
+    const motores = series.filter((serie) => motor(serie.label));
+
+    const grupos: HealthGroup[] = [
+      {
+        key: 'targets',
+        title: 'Targets que Prometheus consigue sondear',
+        items: targets.map(fila),
+        cuenta: `${targets.filter((serie) => (value(serie) ?? 1) < 1).length} en 0`,
+      },
+      {
+        key: 'motores',
+        title: 'Motor de Kafka Streams de cada stack',
+        items: motores.map(fila),
+        cuenta: `${motores.filter((serie) => (value(serie) ?? 1) < 1).length} en 0`,
+      },
+      {
+        key: 'isr',
+        title: 'Particiones con menos copias de las que deberian',
+        items: isrMal.map((serie) => ({
+          label: serie.label,
+          valor: value(serie),
+          tone: 'roto' as const,
+        })),
+        cuenta:
+          isrCero.length > 0
+            ? `${isrMal.length} por encima de 0 · ${isrCero.length} en 0 (plegadas)`
+            : 'ninguna',
+      },
+    ];
+    return grupos.filter((grupo) => grupo.items.length > 0);
   }
+
+  /** El veredicto de salud, en una frase. */
+  protected veredictoSalud(stack: Stack): { tone: string; texto: string } {
+    const series = this.series('salud', stack);
+    if (series.length === 0) {
+      return { tone: 'tenue', texto: 'sin datos todavia' };
+    }
+    const mal = series.filter((serie) => {
+      const dato = value(serie);
+      return serie.label.startsWith('under-replicated/') ? (dato ?? 0) > 0 : (dato ?? 1) < 1;
+    });
+    if (mal.length === 0) {
+      return { tone: 'ok', texto: 'todo lo que el catalogo puede ver esta en pie' };
+    }
+    return {
+      tone: 'roto',
+      texto: `${mal.length} comprobaciones en rojo: ${mal
+        .slice(0, 3)
+        .map((serie) => corto(serie.label, 30))
+        .join(', ')}`,
+    };
+  }
+
+  /* ---------------------------------------------------------------- en vivo */
+
+  /** Cuantas fotos por segundo han llegado entre los dos stacks. */
+  protected readonly fotos = computed(() =>
+    STACKS.reduce((total, stack) => total + (this.live.state()[stack].counters['snapshot'] ?? 0), 0),
+  );
+
+  /** La ultima foto recibida por WebSocket. */
+  protected foto(stack: Stack) {
+    return this.vivo(stack).snapshot;
+  }
+
+  /** La tasa de entrada de la ventana del WebSocket. */
+  protected ventanaIn(stack: Stack): readonly number[] {
+    return this.vivo(stack).window.map(([entran]) => entran);
+  }
+
+  /** Los simbolos de la ultima foto, el mas viejo primero: asi se ve el que se paro. */
+  protected simbolos(
+    stack: Stack,
+  ): readonly { symbol: string; price: string; source: string; age: number }[] {
+    const foto = this.foto(stack);
+    if (!foto) {
+      return [];
+    }
+    return Object.entries(foto.symbols)
+      .map(([symbol, tick]) => ({
+        symbol,
+        price: tick.price,
+        source: tick.source,
+        age: Date.parse(tick.at) || 0,
+      }))
+      .sort((a, b) => a.age - b.age)
+      .slice(0, 12);
+  }
+
+  /* ---------------------------------------------------------------- comparacion */
+
+  protected filasComparativa(stack: Stack): readonly Row[] {
+    const datos: PanelData | null = this.catalog.entry('comparativa', stack).data;
+    return (datos?.series ?? []).map((serie) => ({
+      label: serie.label,
+      valor: value(serie),
+      tone: 'ok' as const,
+      hint: serie.label.startsWith('quarkus') ? 'var(--info)' : 'var(--bien)',
+    }));
+  }
+
+  /* ---------------------------------------------------------------- acciones */
+
+  protected cambiarVista(modo: View): void {
+    this.view.set(modo);
+    void this.catalog.refresh();
+  }
+
+  protected elegirComparado(panel: string): void {
+    this.catalog.comparado.set(panel);
+    void this.catalog.refresh();
+  }
+
+  protected consultar(): void {
+    void this.analytics.query('spring', this.simbolo(), this.minutos());
+  }
+
+  protected readonly analitica = this.analytics.state;
+
+  protected tiempoRelativo(instante: number | null): string {
+    return hace(instante, this.ahora());
+  }
+
+  constructor() {
+    this.live.start();
+    this.catalog.start();
+    this.consultar();
+  }
+
+  ngOnDestroy(): void {
+    // En los tests el componente si se destruye: sin esto, los intervalos dejan Karma colgado.
+    clearInterval(this.latido);
+    this.live.stop();
+    this.catalog.stop();
+  }
+
+  /* Atajos que usan las plantillas. */
+  protected readonly formatEntero = entero;
+  protected readonly formatNumero = numero;
+  protected readonly formatCorto = corto;
+  protected readonly paneles: readonly PanelName[] = ['pulso', 'lag', 'particiones', 'descartes', 'salud', 'transacciones'];
 }

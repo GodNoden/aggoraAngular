@@ -1,219 +1,64 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="utf-8">
-  <title>Aggora · Kafka pipeline dashboard</title>
+  <title>Aggora · el pipeline de Kafka explicado</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Read-only dashboard for the Aggora Kafka pipeline: the same event pipeline in Spring Boot and Quarkus, side by side.">
+  <meta name="description" content="Panel de solo lectura que explica, en lenguaje llano, que esta haciendo el pipeline de Kafka de Aggora: la misma implementacion en Spring Boot y en Quarkus.">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
   <script>
     /*
      * Red de seguridad de arranque.
      *
-     * Si Angular no llega a pintar (un error de runtime, un modulo que no carga), sin esto la pagina
-     * se queda en negro y no dice nada: lo peor posible para diagnosticar, y ademas el navegador ya
-     * no se puede pilotar desde fuera en este equipo. Aqui se deja constancia en el DOM, que es
-     * legible tanto por una persona como por la comprobacion automatica.
+     * Si Angular no llega a pintar, sin esto la pagina se queda en negro y no dice nada, que es lo
+     * peor posible para diagnosticar. Aqui se deja constancia en el DOM, que se puede leer abriendo
+     * la pagina o desde `npm run diag:browser`.
      */
     (function () {
-      var fallos = [];
-      function dejarConstancia(motivo) {
-        fallos.push(motivo);
+      function avisar(motivo) {
         try {
-          if (!document.body) {
-            document.addEventListener(
-              'DOMContentLoaded',
-              function () {
-                dejarConstancia(motivo);
-              },
-              { once: true },
-            );
-            return;
-          }
           var pre = document.getElementById('boot-errors');
           if (!pre) {
             pre = document.createElement('pre');
             pre.id = 'boot-errors';
-            pre.setAttribute('data-boot', 'fail');
             pre.style.cssText =
               'margin:16px;padding:12px;border:1px solid #7f1d1d;border-radius:8px;' +
               'background:#1b1114;color:#ffb4c0;font:12px/1.5 monospace;white-space:pre-wrap;';
-            document.body.appendChild(pre);
+            (document.body || document.documentElement).appendChild(pre);
           }
-          pre.textContent = 'The dashboard did not start:\n' + fallos.join('\n');
+          pre.textContent = 'La pagina no arranco:\n' + motivo;
         } catch (e) {
-          /* Si ni esto funciona, no hay nada que hacer. */
+          /* si ni esto funciona, no hay nada que hacer */
         }
       }
-      window.addEventListener('error', function (evento) {
-        var objetivo = evento.target;
-        if (objetivo && objetivo !== window && objetivo.tagName) {
-          dejarConstancia('failed to load ' + objetivo.tagName.toLowerCase() + ': ' + (objetivo.src || objetivo.href || '?'));
-          return;
-        }
-        dejarConstancia((evento.message || 'error') + ' @ ' + (evento.filename || '?') + ':' + (evento.lineno || 0));
-      }, true);
-      window.addEventListener('unhandledrejection', function (evento) {
-        var razon = evento.reason;
-        dejarConstancia('unhandled rejection: ' + (razon && razon.message ? razon.message : String(razon)));
-      });
-      // Si a los 20 s no hay nada pintado, se dice: mejor un aviso que una pantalla negra.
-      setTimeout(function () {
-        var raiz = document.querySelector('app-root');
-        if (raiz && raiz.children.length === 0 && fallos.length === 0) {
-          dejarConstancia('Angular produced no output after 20s (no exception was thrown)');
-        }
-      }, 20000);
-    })();
-
-    /*
-     * Sonda de red, en JavaScript puro y **antes** de Angular.
-     *
-     * Existe porque el sintoma (todo en "loading", sockets en "connecting") se puede deber a dos
-     * cosas muy distintas: que la app no funcione, o que el navegador no consiga hablar con el
-     * gateway. Esto mide lo segundo sin depender de Angular, ni de signals, ni del render: una
-     * peticion cruda del navegador al propio origen y al gateway.
-     *
-     * El resultado se ve en la pantalla con `?diag=1`, en el bloque de diagnostico.
-     */
-    window.__aggoraProbe = { lines: [], listo: false };
-    (function () {
-      var registro = window.__aggoraProbe;
-      /*
-       * La sonda pinta su propio bloque en el DOM. No espera a Angular a proposito: si la pagina se
-       * queda colgada, el bloque de diagnostico de la app puede no llegar a existir nunca, y entonces
-       * no habria forma de saber que esta pasando sin abrir la consola.
-       */
-      function pintar() {
-        try {
-          // Este script vive en el <head>, asi que al arrancar todavia NO existe <body>: hay que
-          // esperar al DOM. Sin esto, appendChild(null) lanzaba TypeError y el bloque no aparecia
-          // nunca, que es exactamente lo que se veia (nada).
-          if (!document.body) {
-            document.addEventListener('DOMContentLoaded', pintar, { once: true });
+      window.addEventListener(
+        'error',
+        function (evento) {
+          var objetivo = evento.target;
+          if (objetivo && objetivo !== window && objetivo.tagName) {
+            avisar('no se pudo cargar ' + objetivo.tagName.toLowerCase() + ': ' + (objetivo.src || '?'));
             return;
           }
-          var pre = document.getElementById('net-probe');
-          if (!pre) {
-            pre = document.createElement('pre');
-            pre.id = 'net-probe';
-            pre.style.cssText =
-              'margin:16px;padding:12px;border:1px solid #7c5cff;border-radius:8px;' +
-              'background:#120d1c;color:#e6ddff;font:12px/1.6 monospace;white-space:pre-wrap;';
-            document.body.appendChild(pre);
-          }
-          pre.textContent =
-            'Network probe (raw browser, before Angular)' +
-            (registro.listo ? '' : '  [running...]') +
-            '\n' +
-            registro.lines.join('\n');
-        } catch (e) {
-          /* Si esto falla, no hay nada mas que hacer. */
+          avisar((evento.message || 'error') + ' @ ' + (evento.filename || '?') + ':' + (evento.lineno || 0));
+        },
+        true,
+      );
+      window.addEventListener('unhandledrejection', function (evento) {
+        var razon = evento.reason;
+        avisar('promesa rechazada: ' + (razon && razon.message ? razon.message : String(razon)));
+      });
+      // Si a los 15 s no hay nada pintado, se dice: mejor un aviso que una pantalla negra.
+      setTimeout(function () {
+        var raiz = document.querySelector('aggora-root');
+        if (raiz && raiz.children.length === 0 && !document.getElementById('boot-errors')) {
+          avisar('Angular no pinto nada en 15 s y no lanzo ninguna excepcion');
         }
-      }
-      function anotar(linea) {
-        registro.lines.push(linea);
-        pintar();
-      }
-      function probar(etiqueta, url, limiteMs) {
-        var inicio = Date.now();
-        return new Promise(function (resolve) {
-          var control = new AbortController();
-          var corte = setTimeout(function () {
-            control.abort();
-            anotar(etiqueta + ': TIMEOUT a los ' + (Date.now() - inicio) + ' ms');
-            resolve();
-          }, limiteMs);
-          fetch(url, { signal: control.signal, cache: 'no-store' })
-            .then(function (r) {
-              return r.text().then(function (texto) {
-                clearTimeout(corte);
-                anotar(
-                  etiqueta +
-                    ': HTTP ' +
-                    r.status +
-                    ', ' +
-                    texto.length +
-                    ' B en ' +
-                    (Date.now() - inicio) +
-                    ' ms',
-                );
-                resolve();
-              });
-            })
-            .catch(function (e) {
-              clearTimeout(corte);
-              anotar(etiqueta + ': FALLO en ' + (Date.now() - inicio) + ' ms (' + e.name + ': ' + e.message + ')');
-              resolve();
-            });
-        });
-      }
-      (async function () {
-        anotar('origin: ' + location.origin + ' | href: ' + location.href);
-        anotar('tiempo de carga de la pagina: ' + Math.round(performance.now()) + ' ms');
-        /*
-         * Todo EN PARALELO y con un tope corto.
-         *
-         * En serie, si una peticion no vuelve, las siguientes no se llegan a medir y el informe se
-         * queda a medias (que es justo lo que paso). En paralelo, en 4 segundos se sabe que ruta
-         * funciona y cual no.
-         *
-         * Se prueban las dos formas a proposito: la del proxy (mismo origen) y la directa al
-         * gateway. Si la directa funciona y la del proxy no, el culpable es el proxy, y se puede
-         * quitar.
-         */
-        await Promise.all([
-          probar('mismo origen (favicon)', '/favicon.ico', 4000),
-          probar('proxy /api (mismo origen)', '/api/metrics?panel=pulso', 4000),
-          probar('proxy /q/api (mismo origen)', '/q/api/metrics?panel=pulso', 4000),
-          probar('proxy /analytics', '/analytics?symbol=EUR%2FUSD&minutes=3', 4000),
-        ]);
-        // El WebSocket se mide aparte: no es fetch y falla de otra manera.
-        try {
-          var inicioWs = Date.now();
-          var ws = new WebSocket('ws://' + location.host + '/ws');
-          var cerrado = false;
-          ws.onopen = function () {
-            cerrado = true;
-            anotar('websocket /ws: ABIERTO en ' + (Date.now() - inicioWs) + ' ms');
-            ws.close();
-          };
-          ws.onerror = function () {
-            if (!cerrado) {
-              cerrado = true;
-              anotar('websocket /ws: ERROR a los ' + (Date.now() - inicioWs) + ' ms');
-            }
-          };
-          ws.onclose = function (e) {
-            if (!cerrado) {
-              cerrado = true;
-              anotar('websocket /ws: CERRADO code=' + e.code + ' sin abrir');
-            }
-          };
-          setTimeout(function () {
-            if (!cerrado) {
-              cerrado = true;
-              anotar('websocket /ws: sigue en CONNECTING a los 6000 ms');
-            }
-          }, 6000);
-        } catch (e) {
-          anotar('websocket /ws: el constructor lanzo ' + e.message);
-        }
-        // Margen para que el WebSocket cuente su final.
-        await new Promise(function (r) {
-          setTimeout(r, 6500);
-        });
-        registro.listo = true;
-        pintar();
-      })();
-      // Aunque el script se quede a medias, se pinta lo que haya a los 3 s.
-      setTimeout(pintar, 3000);
-      document.addEventListener('DOMContentLoaded', pintar, { once: true });
+      }, 15000);
     })();
   </script>
 </head>
 <body>
-  <app-root></app-root>
+  <aggora-root></aggora-root>
 </body>
 </html>

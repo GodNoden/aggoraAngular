@@ -6,6 +6,12 @@
  * ruta Linux de `--user-data-dir`; sin traducirla, el navegador arranca y muere con codigo 21.
  * `tools/chrome-wsl.sh` ya resuelve eso para Karma; esto es lo mismo pero de un uso: volcar el DOM.
  *
+ * **Aviso, y es importante:** `--dump-dom` devuelve la pagina cuando el navegador cree que ya cargo,
+ * que en esta app es **antes** de que los paneles traigan datos (se piden de uno en uno). Para
+ * comprobar que la pagina funciona usa `npm run verify:live`; para ver consola y red, usa
+ * `npm run diag:browser`. Esto solo vale para mirar el HTML inicial (que los estilos y el esqueleto
+ * salen, por ejemplo), y por eso lo dice al terminar.
+ *
  * Uso:
  *   node tools/dump-dom.mjs <url> [msDeVida]
  *
@@ -93,6 +99,10 @@ const remate = setTimeout(() => {
 hijo.on('exit', () => {
   clearTimeout(remate);
   process.stdout.write(salida);
+  process.stderr.write(
+    '\n[dump-dom] aviso: este volcado sale antes de que los paneles traigan datos. ' +
+      'Para comprobar la pagina: npm run verify:live. Para consola y red: npm run diag:browser.\n',
+  );
 });
 hijo.on('error', (error) => {
   clearTimeout(remate);

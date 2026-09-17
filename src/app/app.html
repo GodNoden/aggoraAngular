@@ -1,294 +1,481 @@
-<header class="topbar">
-  <div class="brand">
+<!--
+  La pagina, de arriba abajo: que es esto, como esta el backend ahora mismo, y luego una seccion por
+  cada cosa que hace el backend. Cada seccion lleva su explicacion en lenguaje llano al lado del
+  dato: los numeros son la evidencia, la explicacion es el producto.
+-->
+
+<header class="cabecera">
+  <div class="marca">
     <h1>Aggora</h1>
-    <p class="subtitle">
-      A Kafka event pipeline for market data, implemented twice: Spring Boot and Quarkus. This page
-      only reads. Every number below comes from the backend over GET or WebSocket.
+    <p>
+      Un pipeline de eventos de mercado construido <strong>dos veces</strong>: una en Spring Boot y
+      otra en Quarkus. Esta pagina no escribe nada; solo mira y explica lo que hacen.
     </p>
   </div>
 
-  <div class="controls">
+  <div class="controles">
     <div class="control">
-      <span class="control-label">Stack</span>
-      <div class="segmented" role="group" aria-label="Which stack to show">
-        @for (stack of stacks; track stack) {
+      <span class="rotulo">Que implementacion mirar</span>
+      <div class="segmentado" role="group" aria-label="Implementacion">
+        @for (stack of ['spring', 'quarkus']; track stack) {
           <button
             type="button"
-            [class.active]="mode() === stack"
-            (click)="cambiarModo(stack)"
-            [attr.aria-pressed]="mode() === stack"
+            [class.activo]="view() === stack"
+            (click)="cambiarVista($any(stack))"
           >
-            {{ etiqueta(stack) }}
+            {{ stack === 'spring' ? 'Spring Boot' : 'Quarkus' }}
           </button>
         }
-        <button
-          type="button"
-          class="both"
-          [class.active]="ambos()"
-          (click)="cambiarModo('both')"
-          [attr.aria-pressed]="ambos()"
-          title="The same data in two columns: two complete implementations of one pipeline"
-        >
-          Spring + Quarkus
+        <button type="button" class="ambos" [class.activo]="ambos()" (click)="cambiarVista('both')">
+          Los dos, en paralelo
         </button>
       </div>
     </div>
 
     <div class="control">
-      <span class="control-label">Side by side panel</span>
-      <select
-        [value]="metrics.comparisonPanel()"
-        (change)="elegirComparativa($any($event.target).value)"
-        [disabled]="!ambos()"
-      >
-        @for (panel of comparablePanels; track panel) {
-          <option [value]="panel" [selected]="panel === metrics.comparisonPanel()">
-            {{ docs[panel].title }}
-          </option>
-        }
-      </select>
-      @if (ambos()) {
-        <span class="control-note">
-          catalog: comparativa&amp;de={{ metrics.comparisonPanel() }}
+      <span class="rotulo">Estado del canal en vivo</span>
+      @for (columna of columnas(); track columna.stack) {
+        <span class="socket" [attr.data-estado]="vivo(columna.stack).state">
+          <span class="punto"></span>
+          {{ columna.label }}: {{ estadoSocket(columna.stack) }}
         </span>
-      } @else {
-        <span class="control-note">switch to Spring + Quarkus to use it</span>
       }
-    </div>
-
-    <div class="control">
-      <span class="control-label">Freshness</span>
-      <button type="button" class="refresh" (click)="metrics.refreshAll()">Refresh now</button>
-      <span class="control-note">
-        panels every {{ intervalSeconds }} s · socket window {{ windowSeconds }} s
-      </span>
+      <span class="socket tenue">{{ formatEntero(fotos()) }} fotos recibidas{{ vivo('quarkus').badFrame ? ' · un frame no cuadraba con el contrato' : '' }}</span>
     </div>
   </div>
-
-  <div class="status">
-    @for (stack of visibles(); track stack) {
-      <span class="sock" [attr.data-state]="live.live()[stack].state" [title]="urlSocket(stack)">
-        <span class="dot"></span>
-        {{ etiqueta(stack) }}: {{ estadoSocket(stack) }}
-      </span>
-    }
-    <span class="sock muted">{{ totalMensajes() }} messages parsed</span>
-    @for (stack of visibles(); track stack) {
-      <span class="sock url">{{ urlSocket(stack) }}</span>
-    }
-  </div>
-
-  @if (sinBackend()) {
-    <p class="banner down">
-      <strong>{{ avisoBackend() }}</strong>
-      <span>
-        The page is read-only: it cannot show data it does not receive and it will not invent any.
-        Check that the gateway is up; the panels are polled every {{ intervalSeconds }} s, so this
-        clears by itself as soon as it answers.
-      </span>
-    </p>
-  }
-
-  @if (metrics.hasErrors()) {
-    <p class="banner">
-      Some panels could not be read. That is shown per panel and never filled in with an empty chart:
-      if the backend is down, the page says so instead of pretending the market went quiet.
-    </p>
-  }
 </header>
 
-@if (visibles().length > 0) {
-  <div class="columns" [class.dos]="ambos()">
-    @for (stack of visibles(); track stack) {
-      <section class="column" [class.single]="!ambos()">
-        @if (ambos()) {
-          <h2 class="column-title" [attr.data-stack]="stack">{{ etiqueta(stack) }}</h2>
-        }
+<!-- ------------------------------------------------------------------ el pipeline -->
 
-    <div class="grid">
-      <div class="cell events" [id]="'panel-live-' + stack">
-        <article class="card">
-          <header class="card-head">
-            <div>
-              <h3>Live, straight from the WebSocket</h3>
-              <span class="origin">{{ etiqueta(stack) }} · ws://…/ws</span>
-            </div>
-            <span class="badge" [attr.data-state]="live.live()[stack].state">
-              {{ live.live()[stack].state }}
-            </span>
-          </header>
-          <p class="card-what">
-            This is the fan-out the gateway sends: a snapshot every second with the last tick per
-            symbol, plus positions and alerts the moment they happen.
-          </p>
-          <app-live-events-panel [live]="live.live()[stack]" />
-          <footer class="card-foot">
-            <p>
-              Why it matters: it is the only data on the page that is pushed rather than polled, and
-              the only one that can be lost. A slow client misses messages and catches up with the
-              next snapshot, so nothing here is treated as a log.
-            </p>
-          </footer>
-        </article>
-      </div>
-
-      @for (slot of slots; track slot.panel) {
-        <div
-          class="cell"
-          [id]="'panel-' + slot.panel"
-          [class.highlighted]="highlighted() === slot.panel"
-        >
-          <app-panel-card
-            [doc]="docs[slot.panel]"
-            [state]="metrics.panel(slot.panel, stack)"
-            [origin]="origen(slot.panel, stack)"
-            [now]="now()"
-          >
-            @switch (slot.view) {
-              @case ('pulse') {
-                <app-pulse-panel [live]="live.live()[stack]" [state]="metrics.panel(slot.panel, stack)" />
-              }
-              @case ('lag') {
-                <app-lag-panel [live]="live.live()[stack]" [state]="metrics.panel(slot.panel, stack)" />
-              }
-              @case ('series') {
-                @if (slot.panel === 'particiones') {
-                  <app-partitions-panel
-                    [state]="metrics.panel(slot.panel, stack)"
-                    [panel]="slot.panel"
-                    [stack]="stack"
-                  />
-                } @else {
-                  <app-dead-letters-panel
-                    [state]="metrics.panel(slot.panel, stack)"
-                    [panel]="slot.panel"
-                    [stack]="stack"
-                  />
-                }
-              }
-              @case ('health') {
-                <app-health-panel [state]="metrics.panel(slot.panel, stack)" [stack]="stack" />
-              }
-              @case ('transactions') {
-                <app-transactions-panel [state]="metrics.panel(slot.panel, stack)" />
-              }
-            }
-          </app-panel-card>
-        </div>
-      }
-
-      <div class="cell compare" [id]="'panel-comparativa'" [class.highlighted]="highlighted() === 'comparativa'">
-        <app-panel-card
-          [doc]="docs['comparativa']"
-          [state]="comparativa()"
-          [origin]="origen('comparativa', stack)"
-          [now]="now()"
-        >
-          <app-metric-list
-            [rows]="filasComparativa()"
-            [emptyText]="
-              comparativa().note ||
-              'the comparison came back empty: the catalog answered with no series for this panel'
-            "
-          />
-          <p class="compare-note">
-            Both implementations write the same data into different topics, so the labels carry the
-            stack (<code>spring/...</code> and <code>quarkus/...</code>). Same shape means both agree;
-            a line that drifts is the divergence worth chasing.
-          </p>
-          @if (metrics.comparisonPanel() === 'particiones') {
-            <p class="compare-note warn">
-              The plain Partitions panel is per partition (<code>topic/partition</code>), but the
-              comparison aggregates each topic without the partition number. So these numbers are
-              totals per side, not partition-aligned pairs. It is a real difference from the contract
-              table, and the live answer is what is shown here.
-            </p>
-          }
-          @if (metrics.comparisonPanel() === 'salud') {
-            <p class="compare-note warn">
-              Health comparison currently only returns the Spring engine series. There is no
-              <code>quarkus/...</code> counterpart in the response, so Quarkus has no line to show:
-              that is the backend's answer, not a missing chart.
-            </p>
-          }
-        </app-panel-card>
-      </div>
-
-      <div class="cell analytics" [id]="'panel-analytics-' + stack">
-        <article class="card">
-          <header class="card-head">
-            <div>
-              <h3>State store query</h3>
-              <span class="origin">{{ etiqueta(stack) }} · /analytics</span>
-            </div>
-            <span class="badge muted">on demand</span>
-          </header>
-          <p class="card-what">
-            The other half of the system: not a Prometheus metric but a live query against the
-            computed window (VWAP, volatility) that the analytics stream publishes.
-          </p>
-          <app-analytics-panel />
-          <footer class="card-foot">
-            <p>
-              Why it matters: it is the only thing on this page that a user asks for, and the one that
-              goes to 503 when the engine dies while the process stays alive (lesson 5).
-            </p>
-          </footer>
-        </article>
-      </div>
-    </div>
-      </section>
+<section class="pipeline">
+  <h2>El camino del dato, de izquierda a derecha</h2>
+  <p class="intro">
+    Cada caja es una cosa que hace el backend. Debajo de cada una, el panel donde se ve. Si algo se
+    rompe, la caja correspondiente es la que primero cambia.
+  </p>
+  <ol class="etapas">
+    @for (etapa of etapas(); track etapa.key) {
+      <li class="etapa" [attr.data-tone]="etapa.tone">
+        <span class="icono" aria-hidden="true">{{ etapa.icono }}</span>
+        <span class="nombre">{{ etapa.nombre }}</span>
+        <span class="que">{{ etapa.que }}</span>
+        <span class="donde">se ve en {{ etapa.donde }}</span>
+      </li>
     }
-  </div>
-}
-
-<section class="lessons-section" id="lecciones">
-  <header class="section-head">
-    <h2>Lesson mode</h2>
-    <p>
-      Five lessons shipped with the backend. Each one provokes something, tells you which panel to
-      watch and what should change, and puts the system back the way it was.
-    </p>
-  </header>
-  <app-lessons-panel (highlight)="resaltar($event)" />
+  </ol>
 </section>
 
-@if (modoVerificacion) {
-  <section class="verify-section">
-    <header class="section-head">
-      <h2>Live verification (?verify=1)</h2>
-      <p>
-        This block only exists for the verification run. It checks, inside the real browser and
-        against the running backend, that snapshots arrive, that the panels show real data, that the
-        stack selector works and that an empty panel says "no data" instead of drawing an empty
-        chart. Read-only, like everything else.
-      </p>
+<!-- ------------------------------------------------------------------ el latido -->
+
+<section class="seccion">
+  <header class="seccion-cabeza">
+    <h2>El latido: lo que el gateway empuja cada segundo</h2>
+    <p>
+      El WebSocket manda una foto por segundo con el <strong>ultimo valor de cada simbolo</strong> (no
+      una lista de ticks), y manda las alertas y las posiciones en cuanto ocurren. Es el unico canal
+      que empuja: todo lo demas de esta pagina se pide cada pocos segundos.
+    </p>
+  </header>
+
+  @for (columna of columnas(); track columna.stack) {
+    @if (ambos()) {
+      <h3 class="titulo-columna">{{ columna.label }}</h3>
+    }
+    <div class="rejilla">
+      <ag-card
+        title="El gateway, en directo"
+        ask="WebSocket /ws · una foto por segundo"
+        [estado]="foto(columna.stack) ? 'ok' : 'pidiendo'"
+        [abierta]="explicar"
+        queVes="Los ticks que el gateway ha resumido en el ultimo segundo y la ultima foto de cada simbolo."
+        porQue="Es la unica via por la que el backend habla sin que se lo pidan. Si el gateway se cae, aqui se nota antes que en Prometheus."
+        normal="La grafica se mueve una vez por segundo y los simbolos tienen precios. La diferencia entre 'entran' y 'salen' es el colapso: muchos ticks se resumen en un valor por simbolo."
+        roto="La linea se queda plana, o los precios envejecen (mira la antiguedad de cada simbolo): un simbolo que deja de cotizar conserva su ultimo precio."
+      >
+        <div class="latido">
+          <div class="cifra">
+            <span class="valor">{{ formatEntero(foto(columna.stack)?.ticksIn) }}</span>
+            <span class="unidad">ticks entran por segundo</span>
+          </div>
+          <div class="cifra pequena">
+            <span class="valor">{{ formatEntero(foto(columna.stack)?.ticksOut) }}</span>
+            <span class="unidad">simbolos salen en la foto</span>
+          </div>
+          <ag-spark [values]="ventanaIn(columna.stack)" color="var(--bien)" label="ticks por segundo del WebSocket" />
+        </div>
+
+        @if (simbolos(columna.stack).length > 0) {
+          <div class="tabla-simbolos">
+            @for (simbolo of simbolos(columna.stack); track simbolo.symbol) {
+              <div class="simbolo">
+                <span class="sim">{{ simbolo.symbol }}</span>
+                <span class="precio">{{ simbolo.price }}</span>
+                <span class="meta">{{ simbolo.source }} · {{ tiempoRelativo(simbolo.age) }}</span>
+              </div>
+            }
+          </div>
+        }
+      </ag-card>
+
+      <ag-card
+        title="Alertas y posiciones: lo que no espera al segundo"
+        ask="mismo WebSocket · llegan al momento"
+        [estado]="vivo(columna.stack).alerts.length + vivo(columna.stack).positions.length > 0 ? 'ok' : 'pidiendo'"
+        [abierta]="explicar"
+        queVes="Alertas con su gravedad y posiciones por cuenta y simbolo. Se envian cuando ocurren, no una vez por segundo."
+        porQue="Es la parte del contrato que mas se parece a un sistema de trading de verdad: una posicion con aviso de margen no puede esperar a la siguiente foto."
+        normal="Alertas que aparecen y se quedan arriba; posiciones que se actualizan por cuenta y simbolo."
+        roto="Silencio prolongado con el socket conectado significa que el motor no esta generando eventos, no que la pagina los pierda."
+      >
+        <div class="eventos">
+          <div class="eventos-cabeza">
+            <span>{{ formatEntero(vivo(columna.stack).alerts.length) }} alertas</span>
+            <span>{{ formatEntero(vivo(columna.stack).positions.length) }} posiciones</span>
+          </div>
+          @for (alerta of vivo(columna.stack).alerts.slice(0, 4); track alerta.ts + alerta.subject) {
+            <p class="alerta" [attr.data-gravedad]="alerta.severity">
+              <span class="gravedad">{{ alerta.severity }}</span>
+              <span class="texto">{{ alerta.subject }} · {{ alerta.detail }}</span>
+            </p>
+          }
+          @if (vivo(columna.stack).positions.length > 0) {
+            <table class="posiciones">
+              <thead>
+                <tr><th>Cuenta</th><th>Simbolo</th><th class="num">Cantidad</th><th class="num">Coste medio</th><th class="num">PnL</th></tr>
+              </thead>
+              <tbody>
+                @for (posicion of vivo(columna.stack).positions.slice(0, 3); track posicion.account + posicion.symbol) {
+                  <tr [class.brecha]="posicion.marginBreach">
+                    <td>{{ posicion.account }}</td>
+                    <td>{{ posicion.symbol }}</td>
+                    <td class="num">{{ posicion.quantity }}</td>
+                    <td class="num">{{ posicion.averageCost }}</td>
+                    <td class="num">{{ posicion.realizedPnl }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+            <p class="tenue-nota">El dinero llega como texto, no como numero: son decimales de Avro y un float los estropearia.</p>
+          }
+        </div>
+      </ag-card>
+    </div>
+  }
+</section>
+
+<!-- ------------------------------------------------------------------ el catalogo -->
+
+<section class="seccion">
+  <header class="seccion-cabeza">
+    <h2>El catalogo: siete preguntas cerradas a Prometheus</h2>
+    <p>
+      El backend expone <strong>siete paneles con nombre</strong> y ninguno mas: no hay PromQL libre,
+      asi que la pagina no puede inventarse consultas. Cada seccion de aqui abajo es una de esas
+      preguntas, con la explicacion de para que sirve.
+    </p>
+  </header>
+
+  @for (columna of columnas(); track columna.stack) {
+    @if (ambos()) {
+      <h3 class="titulo-columna">{{ columna.label }}</h3>
+    }
+
+    <!-- DOCS[0] = pulso: el caudal del pipeline -->
+    <div class="rejilla">
+      <ag-card
+        [title]="docs[0].title"
+        [ask]="docs[0].ask"
+        [estado]="panel('pulso', columna.stack).status"
+        [ms]="panel('pulso', columna.stack).ms"
+        [note]="panel('pulso', columna.stack).note"
+        [abierta]="explicar"
+        [queVes]="docs[0].queVes"
+        [porQue]="docs[0].porQue"
+        [normal]="docs[0].normal"
+        [roto]="docs[0].roto"
+      >
+        <div class="tasas">
+          @for (tasa of tasasPulso(columna.stack); track tasa.label) {
+            <div class="tasa">
+              <span class="muestra" [style.background]="tasa.hint"></span>
+              <span class="nombre">{{ tasa.label }}</span>
+              <span class="valor">{{ formatNumero(tasa.valor) }}/s</span>
+              <ag-spark [values]="historia('pulso', columna.stack, tasa.label)" [color]="tasa.hint ?? 'var(--bien)'" [label]="tasa.label" />
+            </div>
+          }
+          @if (tasasPulso(columna.stack).length === 0) {
+            <p class="esperando">esperando la primera respuesta del catalogo...</p>
+          }
+        </div>
+      </ag-card>
+    </div>
+
+    <div class="rejilla dos">
+      <!-- DOCS[1] = lag: quien se queda atras -->
+      <ag-card
+        [title]="docs[1].title"
+        [ask]="docs[1].ask"
+        [estado]="panel('lag', columna.stack).status"
+        [ms]="panel('lag', columna.stack).ms"
+        [note]="panel('lag', columna.stack).note"
+        [abierta]="explicar"
+        [queVes]="docs[1].queVes"
+        [porQue]="docs[1].porQue"
+        [normal]="docs[1].normal"
+        [roto]="docs[1].roto"
+        [lesson]="docs[1].lesson ?? null"
+      >
+        <ul class="filas">
+          @for (fila of filasLag(columna.stack); track fila.label) {
+            <li [attr.data-tone]="fila.tone">
+              <span class="nombre">{{ formatCorto(fila.label, 34) }}</span>
+              <ag-spark [values]="historia('lag', columna.stack, fila.label)" color="var(--info)" [label]="fila.label" />
+              <span class="valor">{{ formatNumero(fila.valor) }}</span>
+            </li>
+          }
+          @if (filasLag(columna.stack).length === 0) {
+            <li class="esperando">esperando la primera respuesta del catalogo...</li>
+          }
+        </ul>
+      </ag-card>
+
+      <!-- DOCS[3] = descartes: lo que no se pudo procesar -->
+      <ag-card
+        [title]="docs[3].title"
+        [ask]="docs[3].ask"
+        [estado]="panel('descartes', columna.stack).status"
+        [ms]="panel('descartes', columna.stack).ms"
+        [note]="panel('descartes', columna.stack).note"
+        [abierta]="explicar"
+        [queVes]="docs[3].queVes"
+        [porQue]="docs[3].porQue"
+        [normal]="docs[3].normal"
+        [roto]="docs[3].roto"
+        [lesson]="docs[3].lesson ?? null"
+      >
+        <ul class="filas">
+          @for (fila of filasDescartes(columna.stack); track fila.label) {
+            <li [attr.data-tone]="fila.tone">
+              <span class="nombre">{{ formatCorto(fila.label, 34) }}</span>
+              <span class="valor">{{ formatEntero(fila.valor) }}</span>
+            </li>
+          }
+          @if (filasDescartes(columna.stack).length === 0) {
+            <li class="esperando">esperando la primera respuesta del catalogo...</li>
+          }
+        </ul>
+      </ag-card>
+    </div>
+
+    <div class="rejilla dos">
+      <!-- DOCS[2] = particiones: el log avanzando -->
+      <ag-card
+        [title]="docs[2].title"
+        [ask]="docs[2].ask"
+        [estado]="panel('particiones', columna.stack).status"
+        [ms]="panel('particiones', columna.stack).ms"
+        [note]="panel('particiones', columna.stack).note"
+        [abierta]="explicar"
+        [queVes]="docs[2].queVes"
+        [porQue]="docs[2].porQue"
+        [normal]="docs[2].normal"
+        [roto]="docs[2].roto"
+      >
+        <ul class="filas scroll">
+          @for (fila of filasParticiones(columna.stack); track fila.label) {
+            <li [attr.data-tone]="fila.tone">
+              <span class="nombre">{{ formatCorto(fila.label, 34) }}</span>
+              <ag-spark [values]="historia('particiones', columna.stack, fila.label)" color="var(--aviso)" [label]="fila.label" />
+              <span class="valor">{{ formatEntero(fila.valor) }}</span>
+            </li>
+          }
+          @if (filasParticiones(columna.stack).length === 0) {
+            <li class="esperando">esperando la primera respuesta del catalogo...</li>
+          }
+        </ul>
+      </ag-card>
+
+      <!-- DOCS[4] = salud: quien esta vivo y quien solo lo parece -->
+      <ag-card
+        [title]="docs[4].title"
+        [ask]="docs[4].ask"
+        [estado]="panel('salud', columna.stack).status"
+        [ms]="panel('salud', columna.stack).ms"
+        [note]="panel('salud', columna.stack).note"
+        [abierta]="explicar"
+        [queVes]="docs[4].queVes"
+        [porQue]="docs[4].porQue"
+        [normal]="docs[4].normal"
+        [roto]="docs[4].roto"
+        [lesson]="docs[4].lesson ?? null"
+      >
+        <p class="veredicto" [attr.data-tone]="veredictoSalud(columna.stack).tone">
+          {{ veredictoSalud(columna.stack).texto }}
+        </p>
+        @for (grupo of gruposSalud(columna.stack); track grupo.key) {
+          <div class="grupo">
+            <div class="grupo-cabeza">
+              <span>{{ grupo.title }}</span>
+              <span class="cuenta">{{ grupo.cuenta }}</span>
+            </div>
+            <ul class="filas scroll">
+              @for (item of grupo.items; track item.label) {
+                <li [attr.data-tone]="item.tone">
+                  <span class="nombre">{{ formatCorto(item.label, 32) }}</span>
+                  <span class="valor">{{ item.valor === null ? '--' : formatEntero(item.valor) }}</span>
+                </li>
+              }
+            </ul>
+          </div>
+        }
+        @if (gruposSalud(columna.stack).length === 0) {
+          <p class="esperando">esperando la primera respuesta del catalogo...</p>
+        }
+      </ag-card>
+    </div>
+
+    <!-- DOCS[5] = transacciones: el hueco explicado -->
+    <div class="rejilla">
+      <ag-card
+        [title]="docs[5].title"
+        [ask]="docs[5].ask"
+        [estado]="panel('transacciones', columna.stack).status"
+        [ms]="panel('transacciones', columna.stack).ms"
+        [note]="panel('transacciones', columna.stack).note"
+        [abierta]="explicar"
+        [queVes]="docs[5].queVes"
+        [porQue]="docs[5].porQue"
+        [normal]="docs[5].normal"
+        [roto]="docs[5].roto"
+      >
+        <p class="hueco">
+          Este panel esta vacio a proposito. La nota de arriba es la explicacion del propio backend:
+          no es que la pagina no sepa pedirlo, es que esa medida no existe en este Prometheus.
+        </p>
+      </ag-card>
+    </div>
+  }
+</section>
+
+<!-- ------------------------------------------------------------------ comparacion -->
+
+@if (ambos()) {
+  <section class="seccion">
+    <header class="seccion-cabeza">
+      <h2>{{ comparison.title }}</h2>
+      <p>{{ comparison.queVes }} {{ comparison.porQue }}</p>
     </header>
-    <app-verify />
+    <div class="control linea">
+      <span class="rotulo">Que panel comparar</span>
+      <select [value]="comparado()" (change)="elegirComparado($any($event.target).value)">
+        @for (panel of comparables; track panel) {
+          <option [value]="panel">{{ panel }}</option>
+        }
+      </select>
+      <span class="pista">Se pide como <code>comparativa&amp;de={{ comparado() }}</code>, con las series de los dos stacks a la vez.</span>
+    </div>
+    <div class="rejilla dos">
+      @for (columna of columnas(); track columna.stack) {
+        <ag-card
+          [title]="'Comparativa · ' + columna.label"
+          ask="comparativa&de={{ comparado() }}"
+          [estado]="panel('comparativa', columna.stack).status"
+          [ms]="panel('comparativa', columna.stack).ms"
+          [note]="panel('comparativa', columna.stack).note"
+          [abierta]="explicar"
+          [normal]="comparison.normal"
+          [roto]="comparison.roto"
+        >
+          <ul class="filas">
+            @for (fila of filasComparativa(columna.stack); track fila.label) {
+              <li [attr.data-tone]="fila.tone">
+                <span class="muestra" [style.background]="fila.hint"></span>
+                <span class="nombre">{{ fila.label }}</span>
+                <span class="valor">{{ formatNumero(fila.valor, 2) }}</span>
+              </li>
+            }
+            @if (filasComparativa(columna.stack).length === 0) {
+              <li class="esperando">el backend no devolvio series para esta comparacion</li>
+            }
+          </ul>
+        </ag-card>
+      }
+    </div>
   </section>
 }
 
-@if (modoDiag) {
-  <section class="verify-section">
-    <header class="section-head">
-      <h2>Diagnostics (?diag=1)</h2>
-      <p>
-        Panel states, socket states and the raw network probe, readable without opening the browser
-        console. The clock of the page ticks once per second; if that count climbs, the main thread
-        is in a loop and that is why nothing else runs.
-      </p>
-    </header>
-    <pre id="diag-report" class="diag-report">{{ informeDiag() || 'taking the first measurement...' }}</pre>
-  </section>
-}
+<!-- ------------------------------------------------------------------ state store -->
 
-<footer class="page-foot">
+<section class="seccion">
+  <header class="seccion-cabeza">
+    <h2>Lo que el motor de streams ha calculado</h2>
+    <p>
+      Todo lo de arriba lo publica Prometheus. Esto no: aqui se le pregunta al <strong>state store</strong>
+      del motor por las ventanas que ha calculado el, con su VWAP y su volatilidad. Es la unica parte
+      de la pagina que pide el usuario a proposito.
+    </p>
+  </header>
+
+  <div class="rejilla">
+    <ag-card
+      title="Consulta al state store"
+      ask="GET /analytics?symbol=&minutes="
+      [estado]="analitica().status === 'ok' ? 'ok' : analitica().status === 'error' ? 'error' : analitica().status === 'vacio' ? 'vacio' : 'pidiendo'"
+      [ms]="analitica().ms"
+      [note]="analitica().note"
+      [abierta]="explicar"
+      queVes="Las ventanas de tiempo que el motor ha cerrado para un simbolo, con el precio medio ponderado por volumen (VWAP), la media movil y la volatilidad."
+      porQue="Ensenya la diferencia entre 'una metrica que ya existe' y 'una pregunta que se hace ahora'. Si el motor esta muerto, esta consulta falla aunque el proceso siga vivo."
+      normal="Una o dos ventanas cerradas, la mas reciente con su VWAP y su volatilidad."
+      roto="Vacio o un error: el state store no tiene ventanas para ese simbolo y ese tamano de ventana."
+    >
+      <div class="consulta">
+        <label>
+          <span>Simbolo</span>
+          <input [value]="simbolo()" (input)="simbolo.set($any($event.target).value)" />
+        </label>
+        <label>
+          <span>Minutos</span>
+          <input type="number" min="1" max="30" [value]="minutos()" (input)="minutos.set(+$any($event.target).value)" />
+        </label>
+        <button type="button" (click)="consultar()">Preguntar</button>
+      </div>
+
+      @if (analitica().windows.length > 0) {
+        <table class="ventanas">
+          <thead>
+            <tr>
+              <th>Ventana</th><th class="num">Ticks</th><th class="num">Volumen</th>
+              <th class="num">VWAP</th><th class="num">Media</th><th class="num">Volatilidad</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (ventana of analitica().windows; track ventana.windowStart) {
+              <tr>
+                <td>{{ ventana.windowEnd }}</td>
+                <td class="num">{{ formatEntero(ventana.ticks) }}</td>
+                <td class="num">{{ formatEntero(ventana.volume) }}</td>
+                <td class="num">{{ formatNumero(ventana.vwap, 4) }}</td>
+                <td class="num">{{ formatNumero(ventana.movingAverage, 4) }}</td>
+                <td class="num">{{ formatNumero(ventana.volatility, 4) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      } @else {
+        <p class="esperando">Sin ventanas todavia para {{ simbolo() }}.</p>
+      }
+    </ag-card>
+  </div>
+</section>
+
+<footer class="pie">
   <p>
-    Read-only, on purpose. There is no write endpoint anywhere in this contract: the page observes and
-    explains, and the truth stays in Kafka and Prometheus.
+    Esta pagina no escribe nada y no es la fuente de la verdad: la verdad esta en Kafka (los topics) y
+    en Prometheus (las series). Si el gateway se cae, no hay dashboard, pero el pipeline sigue.
   </p>
-  <p class="muted">
-    Contract v1 · panels polled every {{ intervalSeconds }} s · WebSocket window {{ windowSeconds }} s
-    · charts drawn by hand in SVG, no CDN, no chart library
+  <p class="tenue">
+    Contrato v1 · los paneles se piden cada pocos segundos · el WebSocket es el unico canal por
+    segundo · las graficas son `polyline` dibujadas a mano, sin libreria ni CDN
   </p>
 </footer>
